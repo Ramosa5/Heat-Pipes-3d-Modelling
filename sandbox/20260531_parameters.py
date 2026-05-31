@@ -1,4 +1,3 @@
-
 import json
 import os
 import cv2
@@ -9,21 +8,23 @@ import pyvista as pv
 
 def calculate_bubble_eccentricity(
     points: np.ndarray, 
-    diameter: float, 
-    pipe_center: tuple, 
-    slice_thickness: float, 
-    flow_axis: int = 2
+    pipe_center: tuple = (0.0, 0.0),    # HOW TO ESTIMATE?
+    slice_thickness: float = 2,                  
+    diameter: float = 20,               # TBC -> adjust with the main code
+    flow_axis: int = 2,                 # X,Y,Z (CHECK IF MAIN CODE IS RIGHT)
+    debug: bool = True
     ) -> tuple[float, float, float]:
     """
     Calculates the dimensionless eccentricity of a bubble tip from a 3D point cloud.
+    Axis: X (1st, in the center of heat pipe crosssection), Y (2nd, in the center of heat pipe crosssection, opposite to gravity), Z (3rd, in the center of heat pipe crosssection, along the pipe)
     
     Args:
         points (np.ndarray): A 2D array of shape (N, 3) representing the point cloud.
         diameter (float): The diameter of the pipe (D).
         pipe_center (tuple): The (x, y) coordinates of the pipe's central axis.
-        slice_thickness (float): The depth of the slice near the tip to include in the median calculation.
+        slice_thickness (float): The depth of the slice near the tip to include in the median calculation; in voxels.
         flow_axis (int): The index of the axis corresponding to the longitudinal flow 
-                         (default is 2, which corresponds to the Z-axis).
+                         (default corresponds to the Z-axis).
                          
     Returns:
         dimensionless eccentricity and the median transverse offsets.
@@ -51,51 +52,24 @@ def calculate_bubble_eccentricity(
 
     # 4. Calculate dimensionless eccentricity e*
     e_star = float((2.0 / diameter) * np.sqrt(e_x**2 + e_y**2))
+    
+    if debug:
+        print(f"Max axial: {max_axial_coord}")
+        print(f"Tip points: {len(tip_points)}")
+        print("\nAXIS [X, Y, Z]:")
+        print(points.min(axis=0))
+        print(points.max(axis=0))
+        print(f"Median x: {e_x}")
+        print(f"Median y: {e_y}")
+        print(f"Eccentricity: {e_star}")
 
     return e_star, e_x, e_y
-
-
 
 # ==========================================
 # TEST SCRIPT
 # ==========================================
-if __name__ == "__main__":
-    # 1. Load the PLY file using PyVista
-    ply_filename = r"C:\Users\Mateusz\Desktop\CODE\Bubble\sandbox\3Dcloud_tube34.ply" # Update this to your exact filename if needed
-    
-    try:
-        mesh = pv.read(ply_filename)
-        points = mesh.points # This extracts the (N, 3) numpy array directly!
-        print(f"Successfully loaded '{ply_filename}'")
-        print(f"Point cloud shape: {points.shape}")
-    except Exception as e:
-        print(f"Failed to load the PLY file: {e}")
-        exit()
 
-    # 2. Define parameters
-    DIAMETER_MM = 20.0
-    
-    # Because your pipeline uses center_yz=True, the Y and Z axes are centered around 0.
-    PIPE_CENTER = (0.0, 0.0) 
-    
-    # Define how deep of a slice you want from the tip (in mm)
-    SLICE_THICKNESS_MM = 2.0 
-    
-    # In your volume_to_points_mm function, X is the un-centered flow axis (index 0)
-    FLOW_AXIS = 0 
-
-    # 3. Test the function
-    try:
-        e_star, e_x, e_y = calculate_bubble_eccentricity(
-            points=points,
-            diameter=DIAMETER_MM,
-            pipe_center=PIPE_CENTER,
-            slice_thickness=SLICE_THICKNESS_MM,
-            flow_axis=FLOW_AXIS
-        )
-        print("\n--- Results ---")
-        print(f"e* (Dimensionless Eccentricity): {e_star:.4f}")
-        print(f"e_x (Offset): {e_x:.4f} mm")
-        print(f"e_y (Offset): {e_y:.4f} mm")
-    except Exception as e:
-        print(f"\nError calculating eccentricity: {e}")
+# 1. Load the PLY file using PyVista
+ply_filename = r"C:\Users\Mateusz\Desktop\CODE\Bubble\sandbox\3Dcloud_tube34.ply" # Update this to your exact filename if needed
+points = pv.read(ply_filename).points
+calculate_bubble_eccentricity(points)
