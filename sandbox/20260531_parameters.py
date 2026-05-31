@@ -1,3 +1,5 @@
+# TO DO: AXIS, SINGLE BUBBLE OR SEPARATE BUBBLES, IDEAL SPHERES
+
 import json
 import os
 import cv2
@@ -11,7 +13,7 @@ def calculate_bubble_eccentricity(
     pipe_center: tuple = (0.0, 0.0),    # HOW TO ESTIMATE?
     slice_thickness: float = 2,                  
     diameter: float = 20,               # TBC -> adjust with the main code
-    flow_axis: int = 2,                 # X,Y,Z (CHECK IF MAIN CODE IS RIGHT)
+    flow_axis: int = 0,                 # X,Y,Z (CHECK IF MAIN CODE IS RIGHT)
     debug: bool = True
     ) -> tuple[float, float, float]:
     """
@@ -65,11 +67,78 @@ def calculate_bubble_eccentricity(
 
     return e_star, e_x, e_y
 
+
+def visualize_bubble_tip(
+    points: np.ndarray,
+    slice_thickness: float = 2,
+    flow_axis: int = 0,
+):
+    """
+    Visualize:
+    - full point cloud
+    - detected tip slice
+    - median point of tip slice
+    """
+
+    max_axial_coord = np.max(points[:, flow_axis])
+
+    tip_mask = points[:, flow_axis] >= (max_axial_coord - slice_thickness)
+    tip_points = points[tip_mask]
+
+    transverse_axes = [i for i in range(3) if i != flow_axis]
+
+    median_point = tip_points.mean(axis=0)
+    median_point[transverse_axes[0]] = np.median(
+        tip_points[:, transverse_axes[0]]
+    )
+    median_point[transverse_axes[1]] = np.median(
+        tip_points[:, transverse_axes[1]]
+    )
+    median_point[flow_axis] = max_axial_coord
+
+    plotter = pv.Plotter()
+
+    # full cloud
+    plotter.add_points(
+        points,
+        color="lightgray",
+        point_size=2,
+        opacity=0.15,
+    )
+
+    # tip slice
+    plotter.add_points(
+        tip_points,
+        color="red",
+        point_size=6,
+    )
+
+    # median eccentricity point
+    plotter.add_mesh(
+        pv.Sphere(radius=1.0, center=median_point),
+        color="blue"
+    )
+
+    plotter.add_axes()
+    plotter.show()
+    
 # ==========================================
 # TEST SCRIPT
 # ==========================================
 
-# 1. Load the PLY file using PyVista
 ply_filename = r"C:\Users\Mateusz\Desktop\CODE\Bubble\sandbox\3Dcloud_tube34.ply" # Update this to your exact filename if needed
 points = pv.read(ply_filename).points
-calculate_bubble_eccentricity(points)
+
+e_star, e_x, e_y = calculate_bubble_eccentricity(points)
+
+print(
+    f"e*={e_star:.3f}, "
+    f"e_x={e_x:.3f}, "
+    f"e_y={e_y:.3f}"
+)
+
+visualize_bubble_tip(
+    points,
+    slice_thickness=2,
+    flow_axis=0
+)
