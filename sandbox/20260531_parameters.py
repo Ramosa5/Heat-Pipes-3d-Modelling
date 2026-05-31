@@ -1,4 +1,4 @@
-# TO DO: AXIS, SINGLE BUBBLE OR SEPARATE BUBBLES, IDEAL SPHERES
+# TO DO: AXIS CHECK AND CENTER POINT, SINGLE BUBBLE OR SEPARATE BUBBLES
 
 import json
 import os
@@ -8,10 +8,61 @@ import time
 import numpy as np
 import pyvista as pv
 
+
+def generate_rotational_bubble(
+    radius_xy: float = 5.0,
+    radius_axial: float = 15.0,
+    center: tuple = (0.0, 0.0, 0.0),
+    flow_axis: int = 0,
+    n_points: int = 20000,
+) -> np.ndarray:
+    """
+    Generate ideal rotational ellipsoid point cloud.
+
+    radius_xy   -> radius in pipe cross-section
+    radius_axial -> radius along flow direction
+    center      -> bubble center
+    flow_axis   -> 0=X, 1=Y, 2=Z
+    """
+
+    pts = []
+
+    while len(pts) < n_points:
+
+        p = np.random.uniform(
+            low=[-radius_axial, -radius_xy, -radius_xy],
+            high=[radius_axial, radius_xy, radius_xy],
+        )
+
+        # ellipsoid equation
+        result = ((p[0] / radius_axial) ** 2 + (p[1] / radius_xy) ** 2 + (p[2] / radius_xy) ** 2)
+
+        if result <= 1:
+            pts.append(p)
+
+    pts = np.array(pts)
+    
+    axial = pts[:, 0].copy()
+    rad1 = pts[:, 1].copy()
+    rad2 = pts[:, 2].copy()
+
+    if flow_axis == 0:
+        pts = np.column_stack([axial, rad1, rad2])
+
+    elif flow_axis == 1:
+        pts = np.column_stack([rad1, axial, rad2])
+
+    elif flow_axis == 2:
+        pts = np.column_stack([rad1, rad2, axial])
+
+    pts += np.array(center)
+
+    return pts
+
 def calculate_bubble_eccentricity(
     points: np.ndarray, 
     pipe_center: tuple = (0.0, 0.0),    # HOW TO ESTIMATE?
-    slice_thickness: float = 2,                  
+    slice_thickness: float = 1,                  
     diameter: float = 20,               # TBC -> adjust with the main code
     flow_axis: int = 0,                 # X,Y,Z (CHECK IF MAIN CODE IS RIGHT)
     debug: bool = True
@@ -70,7 +121,7 @@ def calculate_bubble_eccentricity(
 
 def visualize_bubble_tip(
     points: np.ndarray,
-    slice_thickness: float = 2,
+    slice_thickness: float = 1,
     flow_axis: int = 0,
 ):
     """
@@ -121,10 +172,55 @@ def visualize_bubble_tip(
 
     plotter.add_axes()
     plotter.show()
-    
+
+
+# ==========================================
+# TEST SCRIPT — ideal rotational bubble
+# ==========================================
+
+print("\nIDEAL BUBBLE\n-----------------")
+
+diameter = 20
+flow_axis = 0
+
+expected_ex = 2.0
+expected_ey = -3.0
+
+points = generate_rotational_bubble(
+    radius_xy=5,
+    radius_axial=12,
+    center=(0.0, expected_ex, expected_ey),
+    flow_axis=flow_axis,
+    n_points=30000)
+
+e_star, e_x, e_y = calculate_bubble_eccentricity(
+    points,
+    pipe_center=(0.0, 0.0),
+    slice_thickness=2,
+    diameter=diameter,
+    flow_axis=flow_axis)
+
+print("\nEXPECTED")
+print(f"e_x = {expected_ex:.3f}")
+print(f"e_y = {expected_ey:.3f}")
+
+print("\nMEASURED")
+print(f"e*  = {e_star:.3f}")
+print(f"e_x = {e_x:.3f}")
+print(f"e_y = {e_y:.3f}")
+
+visualize_bubble_tip(
+    points,
+    slice_thickness=2,
+    flow_axis=flow_axis,
+)
+
 # ==========================================
 # TEST SCRIPT
 # ==========================================
+
+print("\nACTUAL BUBBLE\n------------------")
+
 
 ply_filename = r"C:\Users\Mateusz\Desktop\CODE\Bubble\sandbox\3Dcloud_tube34.ply" # Update this to your exact filename if needed
 points = pv.read(ply_filename).points
@@ -139,6 +235,5 @@ print(
 
 visualize_bubble_tip(
     points,
-    slice_thickness=2,
-    flow_axis=0
-)
+    slice_thickness=1,
+    flow_axis=0)
