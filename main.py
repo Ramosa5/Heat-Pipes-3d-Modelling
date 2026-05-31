@@ -504,6 +504,49 @@ def volume_to_points_mm(volume_bool: np.ndarray, voxel_mm: float, center_yz: boo
 
 
 # ==========================================
+# ZAPIS WYNIKÓW: maski i chmury punktów
+# ==========================================
+def safe_stem(file_name: str) -> str:
+    return os.path.splitext(os.path.basename(file_name))[0]
+
+
+def save_mask(mask: np.ndarray, out_dir: str, file_stem: str, suffix: str):
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"{file_stem}_{suffix}.png")
+
+    # TUTAJ DZIEJE SIĘ ZAPIS MASKI DO FOLDERU masks
+    print(f"[SAVE] Zapisywana jest maska: {out_path}")
+    cv2.imwrite(out_path, mask)
+
+
+def save_point_cloud_from_volume(volume_bool: np.ndarray,
+                                 voxel_mm: float,
+                                 out_dir: str,
+                                 file_stem: str,
+                                 suffix: str,
+                                 center_yz: bool = True,
+                                 max_points: int = 500_000):
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"{file_stem}_{suffix}.ply")
+
+    pts = volume_to_points_mm(
+        volume_bool,
+        voxel_mm,
+        center_yz=center_yz,
+        max_points=max_points
+    )
+
+    if pts is None or pts.size == 0:
+        pts = np.empty((0, 3), dtype=np.float32)
+    else:
+        pts = pts.astype(np.float32, copy=False)
+
+    # TUTAJ DZIEJE SIĘ ZAPIS CHMURY PUNKTÓW DO FOLDERU point_clouds
+    print(f"[SAVE] Zapisywana jest chmura punktów: {out_path}")
+    pv.PolyData(pts).save(out_path)
+
+
+# ==========================================
 # PyVista: live animacja + zostaw ostatnią klatkę
 # ==========================================
 def pv_live_animate_keep_last(frames_data,
@@ -645,7 +688,9 @@ def reconstruct_pair_no_stick(rect_top: np.ndarray,
 def main(dataset_dir="bubble.coco/train",
          coco_file="_annotations.coco.json",
          start_frame=1,
-         n_frames=40):
+         n_frames=40,
+         save_masks=True,
+         save_point_clouds=True):
 
     coco = load_coco(os.path.join(dataset_dir, coco_file))
     images = coco["images"]
@@ -691,6 +736,10 @@ def main(dataset_dir="bubble.coco/train",
     # per-bubble settings:
     MIN_AREA_CC = 80
     IOU_THR = 0.15
+
+    # Foldery wynikowe tworzone automatycznie w folderze dataset_dir
+    MASKS_DIR = "masks"
+    POINT_CLOUDS_DIR = "point_clouds"
 
     frames_data = []
 
@@ -745,6 +794,19 @@ def main(dataset_dir="bubble.coco/train",
             keep_aspect=KEEP_ASPECT
         )
 
+        file_stem = safe_stem(img_info["file_name"])
+
+        if save_masks:
+            # Zapis masek po każdym przetworzonym zdjęciu
+            save_mask(mask1_orig, MASKS_DIR, file_stem, "tube1_orig")
+            save_mask(mask2_orig, MASKS_DIR, file_stem, "tube2_orig")
+            save_mask(mask3_orig, MASKS_DIR, file_stem, "tube3_orig")
+            save_mask(mask4_orig, MASKS_DIR, file_stem, "tube4_orig")
+            save_mask(rect_top_12, MASKS_DIR, file_stem, "tube12_top_rect")
+            save_mask(rect_side_12, MASKS_DIR, file_stem, "tube12_side_rect")
+            save_mask(rect_top_34, MASKS_DIR, file_stem, "tube34_top_rect")
+            save_mask(rect_side_34, MASKS_DIR, file_stem, "tube34_side_rect")
+
         # --- per-bubble reconstruction to avoid sticking ---
         vol_12, voxel_mm_12, n_pairs_12 = reconstruct_pair_no_stick(
             rect_top_12, rect_side_12,
@@ -765,6 +827,11 @@ def main(dataset_dir="bubble.coco/train",
             min_area_cc=MIN_AREA_CC,
             iou_thr=IOU_THR
         )
+
+        if save_point_clouds:
+            # Zapis chmur punktów po stworzeniu każdej chmury punktów
+            save_point_cloud_from_volume(vol_12, voxel_mm_12, POINT_CLOUDS_DIR, file_stem, "tube12")
+            save_point_cloud_from_volume(vol_34, voxel_mm_34, POINT_CLOUDS_DIR, file_stem, "tube34")
 
         print(f"[frame {global_i} ({local_i+1}/{len(images_sel)})] {img_info['file_name']} | "
               f"pairs12={n_pairs_12} filled12={int(vol_12.sum())} | "
@@ -795,5 +862,7 @@ if __name__ == "__main__":
     # start_frame = numer w posortowanej liście (1-based)
     main(
         start_frame=100,  # <- ustaw np. 475
-        n_frames=150
+        n_frames=10,
+        save_masks=True,
+        save_point_clouds=True
     )
