@@ -109,10 +109,7 @@ def calculate_bubble_eccentricity(
     return results
 
 
-def visualize_bubble_tip(
-    points: np.ndarray,
-    slice_thickness: float = 1
-):
+def visualize_bubble_tip(points: np.ndarray, tip_percentile: float = 99.0):
     """
     Visualize:
     - full point cloud
@@ -122,21 +119,11 @@ def visualize_bubble_tip(
     
     x_idx, y_idx, z_idx = 0, 1, 2
 
-    max_axial_coord = np.max(points[:, z_idx])
+    threshold = np.percentile(points[:, z_idx], tip_percentile)
+    tip_points = points[points[:, z_idx] >= threshold]
 
-    tip_mask = points[:, z_idx] >= (max_axial_coord - slice_thickness)
-    tip_points = points[tip_mask]
-
-    transverse_axes = [i for i in range(3) if i != z_idx]
-
-    median_point = tip_points.mean(axis=0)
-    median_point[transverse_axes[0]] = np.median(
-        tip_points[:, transverse_axes[0]]
-    )
-    median_point[transverse_axes[1]] = np.median(
-        tip_points[:, transverse_axes[1]]
-    )
-    median_point[z_idx] = max_axial_coord
+    median_point = np.median(tip_points, axis=0)
+    median_point[z_idx] = np.max(tip_points[:, z_idx])
 
     plotter = pv.Plotter()
 
@@ -168,7 +155,6 @@ def generate_ideal_bubble(
     radius_xy: float = 5.0,
     radius_axial: float = 15.0,
     center: tuple = (0.0, 0.0, 0.0),
-    z_idx: int = 0,
     n_points: int = 20000
 ) -> np.ndarray:
     """
@@ -181,6 +167,8 @@ def generate_ideal_bubble(
     """
 
     pts = []
+    
+    z_idx = 2
 
     while len(pts) < n_points:
 
@@ -221,7 +209,7 @@ def generate_ideal_bubble(
 print("\nIDEAL BUBBLE\n-----------------")
 
 diameter = 20
-z_idx = 0
+z_idx = 2
 
 expected_ex = 2.0
 expected_ey = -3.0
@@ -229,14 +217,11 @@ expected_ey = -3.0
 points = generate_ideal_bubble(
     radius_xy=5,
     radius_axial=12,
-    center=(0.0, expected_ex, expected_ey),
-    z_idx=z_idx,
+    center=(expected_ex, expected_ey, 0.0),
     n_points=30000)
 
-e_star, e_x, e_y = calculate_bubble_eccentricity(
-    points,
-    pipe_center=(0.0, 0.0),
-    diameter=diameter)
+e_star, e_x, e_y = calculate_bubble_eccentricity(points, pipe_center=(0.0, 0.0), diameter=diameter)[0]
+expected_e_star = (2.0 / diameter) * np.sqrt(expected_ex**2 + expected_ey**2)
 
 print("\nEXPECTED")
 print(f"e_x = {expected_ex:.3f}")
@@ -246,8 +231,15 @@ print("\nMEASURED")
 print(f"e*  = {e_star:.3f}")
 print(f"e_x = {e_x:.3f}")
 print(f"e_y = {e_y:.3f}")
+print(f"expected e* = {expected_e_star:.3f}")
+print(f"error ex = {abs(e_x - expected_ex):.3f}")
+print(f"error ey = {abs(e_y - expected_ey):.3f}")
+print(f"error e* = {abs(e_star - expected_e_star):.3f}")
+print(f"relative error ex = {100 * abs(e_x - expected_ex) / abs(expected_ex):.2f}%")
+print(f"relative error ey = {100 * abs(e_y - expected_ey) / abs(expected_ey):.2f}%")
+print(f"relative error e* = {100 * abs(e_star - expected_e_star) / abs(expected_e_star):.2f}%")
 
-visualize_bubble_tip(points, slice_thickness=2)
+visualize_bubble_tip(points)
 
 # ==========================================
 # TEST SCRIPT
@@ -259,8 +251,8 @@ print("\nACTUAL BUBBLE\n------------------")
 ply_filename = r"C:\Users\Mateusz\Desktop\CODE\Bubble\sandbox\3Dcloud_tube34.ply" # Update this to your exact filename if needed
 points = pv.read(ply_filename).points
 
-e_star, e_x, e_y = calculate_bubble_eccentricity(points)
+e_star, e_x, e_y = calculate_bubble_eccentricity(points)[0]
 
 print(f"e*={e_star:.3f}, " f"e_x={e_x:.3f}, " f"e_y={e_y:.3f}")
 
-visualize_bubble_tip(points, slice_thickness=1)
+visualize_bubble_tip(points)
