@@ -1,8 +1,8 @@
 # ============================================================
 # Bubble 3D reconstruction (NO STICKING, NO CENTER STRIP, LESS TAILS)
-# - per-bubble reconstruction (connected components + matching by X overlap)
+# - per-bubble reconstruction (connected components + matching by longitudinal/Z overlap)
 # - NO interpolation across gaps (fill only inside valid segments)
-# - robust column profile (percentiles instead of min/max) -> fewer "tails"
+# - robust longitudinal-column profile (percentiles instead of min/max) -> fewer "tails"
 # - live preview: animates, then keeps LAST FRAME until you close the window
 # - start_frame (1-based) to choose where to start in sorted file_name list
 # ============================================================
@@ -253,7 +253,7 @@ def rectify_and_align_pair(mask_top_orig: np.ndarray, tube_top: dict,
 
 
 # ==========================================
-# CONNECTED COMPONENTS + MATCHING BY X-OVERLAP
+# CONNECTED COMPONENTS + MATCHING BY LONGITUDINAL/Z OVERLAP
 # (rekonstrukcja per-bąbel, brak sklejania)
 # ==========================================
 def connected_components(mask_2d: np.ndarray, min_area: int = 80):
@@ -269,7 +269,7 @@ def connected_components(mask_2d: np.ndarray, min_area: int = 80):
     return comps
 
 
-def x_span(mask_2d: np.ndarray):
+def longitudinal_span(mask_2d: np.ndarray):
     xs = np.where(mask_2d.max(axis=0) > 0)[0]
     if xs.size == 0:
         return None
@@ -286,9 +286,9 @@ def span_iou(a, b):
     return inter / union if union > 0 else 0.0
 
 
-def match_components_by_x(top_comps, side_comps, iou_thr=0.15):
-    top_spans = [x_span(c) for c in top_comps]
-    side_spans = [x_span(c) for c in side_comps]
+def match_components_by_longitudinal_overlap(top_comps, side_comps, iou_thr=0.15):
+    top_spans = [longitudinal_span(c) for c in top_comps]
+    side_spans = [longitudinal_span(c) for c in side_comps]
 
     pairs = []
     used_side = set()
@@ -382,16 +382,31 @@ def _profile_from_mask_columns(mask_2d: np.ndarray, p_lo=5, p_hi=95):
     return center, half, valid
 
 
-def build_volume_elliptic_from_two_masks(mask_top_xz: np.ndarray,
-                                        mask_side_xy: np.ndarray,
+def build_volume_elliptic_from_two_masks(mask_top_yz: np.ndarray,
+                                        mask_side_xz: np.ndarray,
                                         diameter_mm: float,
                                         voxel_mm: float = None,
-                                        smooth_sigma_x: float = 2.0,
+                                        smooth_sigma_z: float = 2.0,
                                         min_radius_vox: float = 0.8):
-    if mask_top_xz.ndim != 2 or mask_side_xy.ndim != 2:
+    """
+    Builds a 3D bubble volume using the SAME coordinate convention as the view/export.
+
+    Required convention used everywhere after rectification:
+    - X: first radial direction of the circular pipe cross-section,
+    - Y: second radial direction of the circular pipe cross-section,
+    - Z: long pipe/cylinder axis.
+
+    Returned volume layout is therefore:
+        volume[x_radial_index, y_radial_index, z_length_index]
+
+    The 2D masks are rectified tube silhouettes:
+    - mask_side_xz columns follow the pipe length, rows describe X radial direction,
+    - mask_top_yz  columns follow the pipe length, rows describe Y radial direction.
+    """
+    if mask_top_yz.ndim != 2 or mask_side_xz.ndim != 2:
         raise ValueError("maski muszą być 2D")
-    H, W = mask_top_xz.shape
-    if mask_side_xy.shape != (H, W):
+    H, W = mask_top_yz.shape
+    if mask_side_xz.shape != (H, W):
         raise ValueError("mask_top i mask_side muszą mieć ten sam rozmiar po pipeline")
 
     mm_per_px = diameter_mm / float(H)
@@ -399,84 +414,98 @@ def build_volume_elliptic_from_two_masks(mask_top_xz: np.ndarray,
         voxel_mm = mm_per_px
 
     R_vox = int(round((diameter_mm / 2.0) / voxel_mm))
-    YZ = 2 * R_vox + 1
-    X = max(1, int(round((W * mm_per_px) / voxel_mm)))
-    x_map = np.linspace(0, X - 1, W).round().astype(int)
+    radial_size = 2 * R_vox + 1
+    z_length_size = max(1, int(round((W * mm_per_px) / voxel_mm)))
+    z_map = np.linspace(0, z_length_size - 1, W).round().astype(int)
 
+    cx = R_vox
     cy = R_vox
-    cz = R_vox
 
-    # TOP -> Z profile (rows are Z)
-    zc_px, zhalf_px, zvalid = _profile_from_mask_columns(mask_top_xz)
-    # SIDE -> Y profile (rows are Y)
-    yc_px, yhalf_px, yvalid = _profile_from_mask_columns(mask_side_xy)
+    # TOP view -> Y profile (rows are radial Y, columns are length/Z)
+    yc_px, yhalf_px, yvalid = _profile_from_mask_columns(mask_top_yz)
+    # SIDE view -> X profile (rows are radial X, columns are length/Z)
+    xc_px, xhalf_px, xvalid = _profile_from_mask_columns(mask_side_xz)
 
-    valid_both = zvalid & yvalid
+    valid_both = xvalid & yvalid
 
-    # Fill only INSIDE valid segments (no bridging between bubbles)
-    zc_px    = _fill_missing_1d_within_segments(zc_px, valid_both)
+    # Fill only INSIDE valid longitudinal segments (no bridging between bubbles)
+    xc_px    = _fill_missing_1d_within_segments(xc_px, valid_both)
     yc_px    = _fill_missing_1d_within_segments(yc_px, valid_both)
-    zhalf_px = _fill_missing_1d_within_segments(zhalf_px, valid_both)
+    xhalf_px = _fill_missing_1d_within_segments(xhalf_px, valid_both)
     yhalf_px = _fill_missing_1d_within_segments(yhalf_px, valid_both)
 
-    # Critical: outside valid -> radii 0 => no fill => no center strip
-    zhalf_px[~valid_both] = 0.0
+    # Critical: outside valid -> radii 0 => no fill => no centre strip
+    xhalf_px[~valid_both] = 0.0
     yhalf_px[~valid_both] = 0.0
 
     px_center = (H - 1) / 2.0
-    z0_mm = (zc_px - px_center) * mm_per_px
+    x0_mm = (xc_px - px_center) * mm_per_px
     y0_mm = (yc_px - px_center) * mm_per_px
 
-    z0_vox = np.round(z0_mm / voxel_mm).astype(np.int32) + cz
+    x0_vox = np.round(x0_mm / voxel_mm).astype(np.int32) + cx
     y0_vox = np.round(y0_mm / voxel_mm).astype(np.int32) + cy
 
-    b_vox = np.maximum(0.0, (zhalf_px * mm_per_px) / voxel_mm).astype(np.float32)  # Z semi-axis
-    a_vox = np.maximum(0.0, (yhalf_px * mm_per_px) / voxel_mm).astype(np.float32)  # Y semi-axis
+    a_vox = np.maximum(0.0, (xhalf_px * mm_per_px) / voxel_mm).astype(np.float32)  # X semi-axis
+    b_vox = np.maximum(0.0, (yhalf_px * mm_per_px) / voxel_mm).astype(np.float32)  # Y semi-axis
 
-    # Smooth only where we have data; simplest: smooth whole arrays but radii are 0 outside valid
-    if smooth_sigma_x and smooth_sigma_x > 0:
+    # Smooth along the pipe length, i.e. along the Z direction.
+    if smooth_sigma_z and smooth_sigma_z > 0:
         if HAS_SCIPY:
-            a_vox = gaussian_filter1d(a_vox, sigma=smooth_sigma_x).astype(np.float32)
-            b_vox = gaussian_filter1d(b_vox, sigma=smooth_sigma_x).astype(np.float32)
-            y0_vox = np.round(gaussian_filter1d(y0_vox.astype(np.float32), sigma=smooth_sigma_x)).astype(np.int32)
-            z0_vox = np.round(gaussian_filter1d(z0_vox.astype(np.float32), sigma=smooth_sigma_x)).astype(np.int32)
+            a_vox = gaussian_filter1d(a_vox, sigma=smooth_sigma_z).astype(np.float32)
+            b_vox = gaussian_filter1d(b_vox, sigma=smooth_sigma_z).astype(np.float32)
+            x0_vox = np.round(gaussian_filter1d(x0_vox.astype(np.float32), sigma=smooth_sigma_z)).astype(np.int32)
+            y0_vox = np.round(gaussian_filter1d(y0_vox.astype(np.float32), sigma=smooth_sigma_z)).astype(np.int32)
         else:
-            k = int(max(3, 2 * round(smooth_sigma_x) + 1))
+            k = int(max(3, 2 * round(smooth_sigma_z) + 1))
             k = k if (k % 2 == 1) else k + 1
             ker = np.ones(k, dtype=np.float32) / k
             a_vox = np.convolve(a_vox, ker, mode="same").astype(np.float32)
             b_vox = np.convolve(b_vox, ker, mode="same").astype(np.float32)
 
-    # apply min radius only where we have non-zero after smoothing
+    # Apply min radius only where we have non-zero after smoothing.
     a_vox = np.where(a_vox > 0.0, np.maximum(a_vox, min_radius_vox), 0.0).astype(np.float32)
     b_vox = np.where(b_vox > 0.0, np.maximum(b_vox, min_radius_vox), 0.0).astype(np.float32)
 
-    vol = np.zeros((X, YZ, YZ), dtype=bool)
+    # SAME LAYOUT AS VIEW/EXPORT: [X_radial, Y_radial, Z_length]
+    vol = np.zeros((radial_size, radial_size, z_length_size), dtype=bool)
 
-    yy, zz = np.meshgrid(np.arange(YZ), np.arange(YZ), indexing="ij")
-    circle = ((yy - cy) ** 2 + (zz - cz) ** 2) <= (R_vox ** 2)
+    xx, yy = np.meshgrid(np.arange(radial_size), np.arange(radial_size), indexing="ij")
+    circular_pipe_cross_section = ((xx - cx) ** 2 + (yy - cy) ** 2) <= (R_vox ** 2)
 
-    for x_px in range(W):
+    for z_px in range(W):
         # if no object here -> skip
-        if a_vox[x_px] <= 0.0 or b_vox[x_px] <= 0.0:
+        if a_vox[z_px] <= 0.0 or b_vox[z_px] <= 0.0:
             continue
 
-        xv = int(x_map[x_px])
+        zv = int(z_map[z_px])
 
-        y0 = int(np.clip(y0_vox[x_px], 0, YZ - 1))
-        z0 = int(np.clip(z0_vox[x_px], 0, YZ - 1))
+        x0 = int(np.clip(x0_vox[z_px], 0, radial_size - 1))
+        y0 = int(np.clip(y0_vox[z_px], 0, radial_size - 1))
 
-        a = float(a_vox[x_px])
-        b = float(b_vox[x_px])
+        a = float(a_vox[z_px])
+        b = float(b_vox[z_px])
 
-        ell = (((yy - y0) / a) ** 2 + ((zz - z0) / b) ** 2) <= 1.0
-        vol[xv] = circle & ell
+        ell = (((xx - x0) / a) ** 2 + ((yy - y0) / b) ** 2) <= 1.0
+        vol[:, :, zv] = circular_pipe_cross_section & ell
 
     return vol, mm_per_px, voxel_mm
 
-
-def volume_to_points_mm(volume_bool: np.ndarray, voxel_mm: float, center_yz: bool = True,
+def volume_to_points_mm(volume_bool: np.ndarray, voxel_mm: float, center_radial_xy: bool = True,
                         max_points: int = 500_000):
+    """
+    Converts a reconstructed volume to points in millimetres.
+
+    SAME COORDINATE SYSTEM AS PROCESSING AND VIEW:
+    - origin: centre of the circular cylinder face at the beginning of the pipe,
+    - X axis: first radial direction of the circular pipe cross-section,
+    - Y axis: second radial direction of the circular pipe cross-section,
+    - Z axis: long cylinder / pipe length.
+
+    Input volume layout is already:
+        volume[x_radial_index, y_radial_index, z_length_index]
+
+    Therefore no axis remapping is performed here.
+    """
     pts = np.argwhere(volume_bool)
     if pts.size == 0:
         return None
@@ -485,23 +514,71 @@ def volume_to_points_mm(volume_bool: np.ndarray, voxel_mm: float, center_yz: boo
         idx = np.random.choice(pts.shape[0], max_points, replace=False)
         pts = pts[idx]
 
-    X, Y, Z = volume_bool.shape
-    cy = (Y - 1) / 2.0
-    cz = (Z - 1) / 2.0
+    X_rad, Y_rad, Z_len = volume_bool.shape
+    cx = (X_rad - 1) / 2.0
+    cy = (Y_rad - 1) / 2.0
 
-    xs = pts[:, 0].astype(np.float32) * voxel_mm
-    ys = pts[:, 1].astype(np.float32)
-    zs = pts[:, 2].astype(np.float32)
+    x_radial = pts[:, 0].astype(np.float32)
+    y_radial = pts[:, 1].astype(np.float32)
+    z_length = pts[:, 2].astype(np.float32) * voxel_mm
 
-    if center_yz:
-        ys = (ys - cy) * voxel_mm
-        zs = (zs - cz) * voxel_mm
+    if center_radial_xy:
+        x_radial = (x_radial - cx) * voxel_mm
+        y_radial = (y_radial - cy) * voxel_mm
     else:
-        ys = ys * voxel_mm
-        zs = zs * voxel_mm
+        x_radial = x_radial * voxel_mm
+        y_radial = y_radial * voxel_mm
 
-    return np.c_[xs, ys, zs]
+    return np.c_[x_radial, y_radial, z_length]
 
+
+
+# ==========================================
+# SYLWETKA RURKI 3D JAKO CYLINDER PyVista
+# ==========================================
+def build_pipe_cylinder_mesh_from_rectified_shape(rect_shape,
+                                                  diameter_mm: float,
+                                                  voxel_mm: float = None,
+                                                  resolution: int = 96,
+                                                  open_ends: bool = True):
+    H, W = rect_shape[:2]
+    if H <= 0 or W <= 0:
+        return pv.PolyData()
+
+    mm_per_px = diameter_mm / float(H)
+    if voxel_mm is None:
+        voxel_mm = mm_per_px
+
+    # Długość cylindra w tym samym układzie metrycznym co punkty bąbli.
+    length_mm = max(float(voxel_mm), float(W) * float(mm_per_px))
+    radius_mm = float(diameter_mm) / 2.0
+
+    # Required coordinate system:
+    # - origin at the centre of one circular cylinder face,
+    # - long pipe dimension along Z,
+    # - therefore the cylinder spans approximately z=[0, length_mm].
+    center = (0.0, 0.0, length_mm / 2.0)
+
+    # PyVista has a built-in cylinder mesh. capping=False keeps the pipe open,
+    # so the end faces do not hide the bubbles inside.
+    try:
+        return pv.Cylinder(
+            center=center,
+            direction=(0.0, 0.0, 1.0),
+            radius=radius_mm,
+            height=length_mm,
+            resolution=int(resolution),
+            capping=not bool(open_ends)
+        )
+    except TypeError:
+        # Older PyVista versions may not support the capping argument.
+        return pv.Cylinder(
+            center=center,
+            direction=(0.0, 0.0, 1.0),
+            radius=radius_mm,
+            height=length_mm,
+            resolution=int(resolution)
+        )
 
 # ==========================================
 # ZAPIS WYNIKÓW: maski i chmury punktów
@@ -524,7 +601,7 @@ def save_point_cloud_from_volume(volume_bool: np.ndarray,
                                  out_dir: str,
                                  file_stem: str,
                                  suffix: str,
-                                 center_yz: bool = True,
+                                 center_radial_xy: bool = True,
                                  max_points: int = 500_000):
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, f"{file_stem}_{suffix}.ply")
@@ -532,7 +609,7 @@ def save_point_cloud_from_volume(volume_bool: np.ndarray,
     pts = volume_to_points_mm(
         volume_bool,
         voxel_mm,
-        center_yz=center_yz,
+        center_radial_xy=center_radial_xy,
         max_points=max_points
     )
 
@@ -547,54 +624,184 @@ def save_point_cloud_from_volume(volume_bool: np.ndarray,
 
 
 # ==========================================
+# PyVista: kamera i środek układu współrzędnych
+# ==========================================
+def estimate_origin_view_distance_from_frame(fd: dict,
+                                             min_distance_mm: float = 80.0,
+                                             zoom_out: float = 1.8) -> float:
+    """
+    Estimates a safe camera distance, but keeps the VIEW CENTRE at (0, 0, 0).
+
+    This is intentionally different from reset_camera(), because reset_camera()
+    centres the view on the object bounds. Here the required view centre is the
+    coordinate-system origin: the centre of the circular cylinder face at z=0.
+    """
+    max_abs = 0.0
+
+    for key in ("pipe_mesh_12", "pipe_mesh_34"):
+        mesh = fd.get(key, None)
+        if mesh is None or getattr(mesh, "n_points", 0) == 0:
+            continue
+        try:
+            bounds = mesh.bounds  # xmin, xmax, ymin, ymax, zmin, zmax
+            max_abs = max(max_abs, max(abs(float(v)) for v in bounds))
+        except Exception:
+            pass
+
+    for vol_key, vox_key in (("vol_12", "vox_12"), ("vol_34", "vox_34")):
+        vol = fd.get(vol_key, None)
+        vox = fd.get(vox_key, None)
+        if vol is None or vox is None:
+            continue
+        try:
+            # volume shape is [X_radial, Y_radial, Z_length]
+            length_mm = float(vol.shape[2]) * float(vox)
+            radius_like_mm = 0.5 * max(float(vol.shape[0]), float(vol.shape[1])) * float(vox)
+            max_abs = max(max_abs, length_mm, radius_like_mm)
+        except Exception:
+            pass
+
+    return max(float(min_distance_mm), float(max_abs) * float(zoom_out))
+
+
+def set_camera_centered_on_coordinate_origin(plotter,
+                                             distance_mm: float,
+                                             origin=(0.0, 0.0, 0.0)):
+    """
+    Sets camera focal point to the coordinate-system origin.
+
+    Result:
+    - centre of the view = (0, 0, 0),
+    - mouse rotation/orbit is easier because it rotates around the origin,
+    - the pipe still extends along +Z from the origin.
+    """
+    ox, oy, oz = map(float, origin)
+    d = float(distance_mm)
+
+    # View from an oblique direction, so both circular face and Z-length are visible.
+    camera_position = (ox + d, oy - d, oz + 0.65 * d)
+
+    try:
+        plotter.camera.position = camera_position
+        plotter.camera.focal_point = (ox, oy, oz)
+        plotter.camera.up = (0.0, 1.0, 0.0)
+        plotter.camera.clipping_range = (0.001, max(10.0 * d, 1000.0))
+    except Exception:
+        pass
+
+    try:
+        plotter.set_focus((ox, oy, oz))
+    except Exception:
+        pass
+
+    try:
+        plotter.set_position(camera_position)
+    except Exception:
+        pass
+
+    try:
+        plotter.set_viewup((0.0, 1.0, 0.0))
+    except Exception:
+        pass
+
+
+def add_coordinate_origin_marker(plotter,
+                                 radius_mm: float = 1.0,
+                                 color: str = "red"):
+    """Adds a small marker at (0, 0, 0), i.e. at the centre of the circular pipe face."""
+    try:
+        marker = pv.Sphere(radius=float(radius_mm), center=(0.0, 0.0, 0.0), theta_resolution=24, phi_resolution=12)
+        plotter.add_mesh(marker, color=color, name="coordinate_origin_marker")
+    except Exception:
+        pass
+
+# ==========================================
 # PyVista: live animacja + zostaw ostatnią klatkę
 # ==========================================
 def pv_live_animate_keep_last(frames_data,
-                              center_yz: bool = True,
+                              center_radial_xy: bool = True,
                               max_points: int = 200_000,
                               point_size: float = 3.0,
                               pause_s: float = 0.05,
-                              zoom_out: float = 1.8):
+                              zoom_out: float = 1.8,
+                              show_pipe: bool = True,
+                              pipe_opacity: float = 0.5,
+                              center_view_on_origin: bool = True,
+                              show_origin_marker: bool = True):
     def safe_pts(vol, vox):
-        pts = volume_to_points_mm(vol, vox, center_yz=center_yz, max_points=max_points)
+        pts = volume_to_points_mm(vol, vox, center_radial_xy=center_radial_xy, max_points=max_points)
         if pts is None:
             return np.empty((0, 3), dtype=np.float32)
         return pts.astype(np.float32, copy=False)
 
-    p = pv.Plotter(shape=(1, 2), window_size=(1500, 720), off_screen=False, title="Bubbles (live)")
+    def safe_pipe_mesh(fd, key_mesh):
+        mesh = fd.get(key_mesh, None)
+        if mesh is None:
+            return pv.PolyData()
+        return mesh
+
+    p = pv.Plotter(shape=(1, 2), window_size=(1500, 720), off_screen=False, title="Bubbles + Z-axis cylindrical pipe (live)")
+
+    # Lepsze renderowanie przezroczystości w PyVista/VTK, jeśli dana wersja to obsługuje.
+    try:
+        p.enable_depth_peeling()
+    except Exception:
+        pass
 
     fd0 = frames_data[0]
     poly_a = pv.PolyData(safe_pts(fd0["vol_12"], fd0["vox_12"]))
     poly_b = pv.PolyData(safe_pts(fd0["vol_34"], fd0["vox_34"]))
 
+    pipe_mesh_a = safe_pipe_mesh(fd0, "pipe_mesh_12")
+    pipe_mesh_b = safe_pipe_mesh(fd0, "pipe_mesh_34")
+
     p.subplot(0, 0)
-    p.add_text("Bubble 3D (tube1&2)", font_size=12)
+    p.add_text("Bubble 3D + Z-axis pipe (tube1&2)", font_size=12)
+    if show_pipe and pipe_mesh_a.n_cells > 0:
+        # Półprzezroczysty cylinder rurki.
+        p.add_mesh(pipe_mesh_a, opacity=pipe_opacity, color="lightgray", scalars=None, show_scalar_bar=False)
     p.add_points(poly_a, render_points_as_spheres=True, point_size=point_size)
+    if show_origin_marker:
+        add_coordinate_origin_marker(p, radius_mm=0.06 * 20.0)
     p.add_axes()
     p.show_grid()
 
     p.subplot(0, 1)
-    p.add_text("Bubble 3D (tube3&4)", font_size=12)
+    p.add_text("Bubble 3D + Z-axis pipe (tube3&4)", font_size=12)
+    if show_pipe and pipe_mesh_b.n_cells > 0:
+        # Półprzezroczysty cylinder rurki.
+        p.add_mesh(pipe_mesh_b, opacity=pipe_opacity, color="lightgray", scalars=None, show_scalar_bar=False)
     p.add_points(poly_b, render_points_as_spheres=True, point_size=point_size)
+    if show_origin_marker:
+        add_coordinate_origin_marker(p, radius_mm=0.06 * 20.0)
     p.add_axes()
     p.show_grid()
 
     p.link_views()
 
-    # --- AUTO CAMERA: oddal widok zanim zacznie się animacja ---
-    p.reset_camera()
+    # --- CAMERA MANAGEMENT ---
+    # Do NOT use reset_camera() here, because it centres the view on object bounds.
+    # Requirement: centre of the view must be the coordinate-system origin (0,0,0).
+    if center_view_on_origin:
+        view_distance_mm = estimate_origin_view_distance_from_frame(fd0, zoom_out=zoom_out)
+        p.subplot(0, 0)
+        set_camera_centered_on_coordinate_origin(p, view_distance_mm, origin=(0.0, 0.0, 0.0))
+        p.subplot(0, 1)
+        set_camera_centered_on_coordinate_origin(p, view_distance_mm, origin=(0.0, 0.0, 0.0))
+    else:
+        p.reset_camera()
 
-    # twarde oddalenie (distance)
-    try:
-        p.camera.distance = float(p.camera.distance) * float(zoom_out)
-    except Exception:
-        pass
+        # twarde oddalenie (distance)
+        try:
+            p.camera.distance = float(p.camera.distance) * float(zoom_out)
+        except Exception:
+            pass
 
-    # dodatkowe "zoom out" (mniej niż 1 oddala)
-    try:
-        p.camera.zoom(1.0 / float(zoom_out))
-    except Exception:
-        pass
+        # dodatkowe "zoom out" (mniej niż 1 oddala)
+        try:
+            p.camera.zoom(1.0 / float(zoom_out))
+        except Exception:
+            pass
 
     try:
         p.show(auto_close=False, interactive_update=True)
@@ -624,25 +831,24 @@ def pv_live_animate_keep_last(frames_data,
     # This call blocks and keeps the current scene (last frame).
     p.show(auto_close=True)
 
-
 # ==========================================
 # Per-pair reconstruction WITHOUT STICKING
 # - connected components in rectified masks
-# - match TOP<->SIDE components by X overlap
+# - match TOP<->SIDE components by longitudinal/Z overlap
 # - reconstruct each bubble separately, OR volumes
 # ==========================================
 def reconstruct_pair_no_stick(rect_top: np.ndarray,
                               rect_side: np.ndarray,
                               diameter_mm: float,
                               voxel_mm: float,
-                              smooth_sigma_x: float,
+                              smooth_sigma_z: float,
                               min_radius_vox: float,
                               min_area_cc: int = 80,
                               iou_thr: float = 0.15):
     top_comps = connected_components(rect_top, min_area=min_area_cc)
     side_comps = connected_components(rect_side, min_area=min_area_cc)
 
-    pairs = match_components_by_x(top_comps, side_comps, iou_thr=iou_thr)
+    pairs = match_components_by_longitudinal_overlap(top_comps, side_comps, iou_thr=iou_thr)
 
     vol_out = None
     voxel_out = None
@@ -652,7 +858,7 @@ def reconstruct_pair_no_stick(rect_top: np.ndarray,
             mt, ms,
             diameter_mm=diameter_mm,
             voxel_mm=voxel_mm,
-            smooth_sigma_x=smooth_sigma_x,
+            smooth_sigma_z=smooth_sigma_z,
             min_radius_vox=min_radius_vox
         )
         if vol_out is None:
@@ -664,11 +870,11 @@ def reconstruct_pair_no_stick(rect_top: np.ndarray,
                 vol_out |= v
             else:
                 # rare: shape mismatch due to rounding (very unlikely). pad to max.
-                X = max(vol_out.shape[0], v.shape[0])
-                Y = max(vol_out.shape[1], v.shape[1])
-                Z = max(vol_out.shape[2], v.shape[2])
-                vv = np.zeros((X, Y, Z), dtype=bool)
-                oo = np.zeros((X, Y, Z), dtype=bool)
+                X_rad = max(vol_out.shape[0], v.shape[0])
+                Y_rad = max(vol_out.shape[1], v.shape[1])
+                Z_len = max(vol_out.shape[2], v.shape[2])
+                vv = np.zeros((X_rad, Y_rad, Z_len), dtype=bool)
+                oo = np.zeros((X_rad, Y_rad, Z_len), dtype=bool)
                 oo[:vol_out.shape[0], :vol_out.shape[1], :vol_out.shape[2]] = vol_out
                 vv[:v.shape[0], :v.shape[1], :v.shape[2]] = v
                 vol_out = oo | vv
@@ -730,7 +936,7 @@ def main(dataset_dir="bubble.coco/train",
 
     DIAMETER_MM = 20.0
     VOXEL_MM = None  # None => voxel_mm = mm_per_px
-    SMOOTH_SIGMA_X = 2.0
+    SMOOTH_SIGMA_Z = 2.0
     MIN_RADIUS_VOX = 0.8
 
     # per-bubble settings:
@@ -812,7 +1018,7 @@ def main(dataset_dir="bubble.coco/train",
             rect_top_12, rect_side_12,
             diameter_mm=DIAMETER_MM,
             voxel_mm=VOXEL_MM,
-            smooth_sigma_x=SMOOTH_SIGMA_X,
+            smooth_sigma_z=SMOOTH_SIGMA_Z,
             min_radius_vox=MIN_RADIUS_VOX,
             min_area_cc=MIN_AREA_CC,
             iou_thr=IOU_THR
@@ -822,10 +1028,29 @@ def main(dataset_dir="bubble.coco/train",
             rect_top_34, rect_side_34,
             diameter_mm=DIAMETER_MM,
             voxel_mm=VOXEL_MM,
-            smooth_sigma_x=SMOOTH_SIGMA_X,
+            smooth_sigma_z=SMOOTH_SIGMA_Z,
             min_radius_vox=MIN_RADIUS_VOX,
             min_area_cc=MIN_AREA_CC,
             iou_thr=IOU_THR
+        )
+
+        # --- cylindrical pipe as real cylinder based on rectified tube coordinates ---
+        # Coordinate system after conversion:
+        #   X,Y = radial circular cross-section, Z = long pipe axis.
+        # Origin is at the centre of the circular cylinder face at z=0.
+        pipe_mesh_12 = build_pipe_cylinder_mesh_from_rectified_shape(
+            rect_top_12.shape,
+            diameter_mm=DIAMETER_MM,
+            voxel_mm=voxel_mm_12,
+            resolution=96,
+            open_ends=True
+        )
+        pipe_mesh_34 = build_pipe_cylinder_mesh_from_rectified_shape(
+            rect_top_34.shape,
+            diameter_mm=DIAMETER_MM,
+            voxel_mm=voxel_mm_34,
+            resolution=96,
+            open_ends=True
         )
 
         if save_point_clouds:
@@ -841,8 +1066,10 @@ def main(dataset_dir="bubble.coco/train",
             "title": f"Frame {global_i}: {img_info['file_name']}",
             "vol_12": vol_12,
             "vox_12": voxel_mm_12,
+            "pipe_mesh_12": pipe_mesh_12,
             "vol_34": vol_34,
             "vox_34": voxel_mm_34,
+            "pipe_mesh_34": pipe_mesh_34,
         })
 
     if not frames_data:
@@ -851,10 +1078,14 @@ def main(dataset_dir="bubble.coco/train",
     # Live preview: animates + KEEPS LAST FRAME until you close the window
     pv_live_animate_keep_last(
         frames_data,
-        center_yz=True,
+        center_radial_xy=True,
         max_points=200_000,
         point_size=3.0,
-        pause_s=0.25
+        pause_s=0.25,
+        show_pipe=True,
+        pipe_opacity=0.5,
+        center_view_on_origin=True,
+        show_origin_marker=True
     )
 
 
@@ -863,6 +1094,6 @@ if __name__ == "__main__":
     main(
         start_frame=100,  # <- ustaw np. 475
         n_frames=10,
-        save_masks=True,
-        save_point_clouds=True
+        save_masks=False,
+        save_point_clouds=False
     )
