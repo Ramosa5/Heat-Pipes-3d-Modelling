@@ -37,6 +37,8 @@ def calculate_bubble_eccentricity(
             - e_y (float): The median offset of the tip along the second transverse axis.
     """
     
+    # IN PIPELINE ADD: if number of points != 0: calculate_bubble_eccentricity(...)
+    
     # 0. Validate inputs
     if points is None or len(points) == 0:
         raise ValueError("The input point cloud is missing.")
@@ -108,45 +110,93 @@ def calculate_bubble_eccentricity(
 
     return results
 
+# ==========================================
+# SUPPORT FUNCTIONS
+# ==========================================
 
-def visualize_bubble_tip(points: np.ndarray, tip_percentile: float = 99.0):
+def visualize_bubble_tip(
+    points: np.ndarray,
+    bubble_count: int = 1,
+    tip_percentile: float = 99.0
+):
     """
     Visualize:
-    - full point cloud
-    - detected tip slice
-    - median point of tip slice
+    - full point cloud (gray)
+    - tip regions (red)
+    - eccentricity median points (blue)
     """
-    
-    x_idx, y_idx, z_idx = 0, 1, 2
 
-    threshold = np.percentile(points[:, z_idx], tip_percentile)
-    tip_points = points[points[:, z_idx] >= threshold]
+    z_idx = 2
 
-    median_point = np.median(tip_points, axis=0)
-    median_point[z_idx] = np.max(tip_points[:, z_idx])
+    flow_coords = points[:, z_idx]
+    sort_idx = np.argsort(flow_coords)
+    sorted_flow_coords = flow_coords[sort_idx]
+
+    if bubble_count > 1:
+
+        gaps = np.diff(sorted_flow_coords)
+
+        gap_idxs = np.argsort(gaps)[-(bubble_count - 1):]
+
+        split_idxs = np.sort(gap_idxs) + 1
+
+        bubble_point_indices = np.split(sort_idx, split_idxs)
+
+    else:
+
+        bubble_point_indices = [sort_idx]
 
     plotter = pv.Plotter()
 
-    # full cloud
+    # Full cloud
     plotter.add_points(
         points,
         color="lightgray",
         point_size=2,
-        opacity=0.15,
+        opacity=0.15
     )
 
-    # tip slice
-    plotter.add_points(
-        tip_points,
-        color="red",
-        point_size=6,
-    )
+    # Individual bubbles
+    for i, idxs in enumerate(bubble_point_indices):
 
-    # median eccentricity point
-    plotter.add_mesh(
-        pv.Sphere(radius=1.0, center=median_point),
-        color="blue"
-    )
+        bubble_points = points[idxs]
+
+        threshold = np.percentile(
+            bubble_points[:, z_idx],
+            tip_percentile
+        )
+
+        tip_points = bubble_points[
+            bubble_points[:, z_idx] >= threshold
+        ]
+
+        if len(tip_points) == 0:
+            continue
+
+        median_point = np.median(
+            tip_points,
+            axis=0
+        )
+
+        median_point[z_idx] = np.max(
+            tip_points[:, z_idx]
+        )
+
+        # Red tip region
+        plotter.add_points(
+            tip_points,
+            color="red",
+            point_size=8
+        )
+
+        # Blue eccentricity point
+        plotter.add_mesh(
+            pv.Sphere(
+                radius=1.0,
+                center=median_point
+            ),
+            color="blue"
+        )
 
     plotter.add_axes()
     plotter.show()
@@ -172,10 +222,7 @@ def generate_ideal_bubble(
 
     while len(pts) < n_points:
 
-        p = np.random.uniform(
-            low=[-radius_axial, -radius_xy, -radius_xy],
-            high=[radius_axial, radius_xy, radius_xy],
-        )
+        p = np.random.uniform( low=[-radius_axial, -radius_xy, -radius_xy], high=[radius_axial, radius_xy, radius_xy])
 
         # ellipsoid equation
         result = ((p[0] / radius_axial) ** 2 + (p[1] / radius_xy) ** 2 + (p[2] / radius_xy) ** 2)
@@ -208,17 +255,13 @@ def generate_ideal_bubble(
 
 print("\nIDEAL BUBBLE\n-----------------")
 
-diameter = 20
+diameter = 25
 z_idx = 2
 
 expected_ex = 2.0
 expected_ey = -3.0
 
-points = generate_ideal_bubble(
-    radius_xy=5,
-    radius_axial=12,
-    center=(expected_ex, expected_ey, 0.0),
-    n_points=30000)
+points = generate_ideal_bubble(radius_xy=5, radius_axial=12, center=(expected_ex, expected_ey, 0.0), n_points=30000)
 
 e_star, e_x, e_y = calculate_bubble_eccentricity(points, pipe_center=(0.0, 0.0), diameter=diameter)[0]
 expected_e_star = (2.0 / diameter) * np.sqrt(expected_ex**2 + expected_ey**2)
@@ -242,17 +285,32 @@ print(f"relative error e* = {100 * abs(e_star - expected_e_star) / abs(expected_
 visualize_bubble_tip(points)
 
 # ==========================================
-# TEST SCRIPT
+# ACTUAL BUBBLE
 # ==========================================
 
-print("\nACTUAL BUBBLE\n------------------")
+print("\nACTUAL BUBBLES\n------------------")
 
-
-ply_filename = r"C:\Users\Mateusz\Desktop\CODE\Bubble\sandbox\3Dcloud_tube34.ply" # Update this to your exact filename if needed
+ply_filename = r"C:\Users\Mateusz\Desktop\CODE\Bubble\sandbox\3Dcloud_tube34.ply"
 points = pv.read(ply_filename).points
 
-e_star, e_x, e_y = calculate_bubble_eccentricity(points)[0]
+bubble_count = 3
 
-print(f"e*={e_star:.3f}, " f"e_x={e_x:.3f}, " f"e_y={e_y:.3f}")
+results = calculate_bubble_eccentricity(
+    points,
+    bubble_count=bubble_count,
+    pipe_center=(0.0, 0.0),
+    diameter=25,
+    tip_percentile=99.0,
+    debug=True
+)
 
-visualize_bubble_tip(points)
+print("\nSUMMARY")
+for i, (e_star, e_x, e_y) in enumerate(results):
+    print(
+        f"Bubble {i+1}: "
+        f"e*={e_star:.3f}, "
+        f"e_x={e_x:.3f}, "
+        f"e_y={e_y:.3f}"
+    )
+
+visualize_bubble_tip(points, bubble_count=bubble_count, tip_percentile=99.0)
