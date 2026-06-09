@@ -1095,5 +1095,5 @@ if __name__ == "__main__":
         start_frame=100,  # <- ustaw np. 475
         n_frames=10,
         save_masks=False,
-        save_point_clouds=False
+        save_point_clouds=True
     )
