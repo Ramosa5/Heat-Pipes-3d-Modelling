@@ -178,15 +178,14 @@ def visualize_bubble_tip(
             axis=0
         )
 
-        median_point[z_idx] = np.max(
-            tip_points[:, z_idx]
-        )
+        # median_point[z_idx] = np.max(tip_points[:, z_idx]) # IF WANT MAXIMUM AND NOT MEDIAN Z-AXIS
 
         # Red tip region
         plotter.add_points(
             tip_points,
             color="red",
-            point_size=8
+            point_size=8,
+            opacity=0.75
         )
 
         # Blue eccentricity point
@@ -201,12 +200,15 @@ def visualize_bubble_tip(
     plotter.add_axes()
     plotter.show()
 
+# ==========================================
+# TESTING FUNCTIONS
+# ==========================================
 def generate_ideal_bubble(
     radius_xy: float = 5.0,
     radius_axial: float = 15.0,
     center: tuple = (0.0, 0.0, 0.0),
     n_points: int = 20000
-) -> np.ndarray:
+    ) -> np.ndarray:
     """
     Generate ideal rotational ellipsoid point cloud.
 
@@ -250,67 +252,90 @@ def generate_ideal_bubble(
     return pts
 
 # ==========================================
-# TEST SCRIPT — ideal rotational bubble
-# ==========================================
+def ideal_testing():
+    """
+    # TEST SCRIPT — ideal rotational bubble
+    """
+    
+    test_cases = [
+        {"radius_xy": 5, "radius_axial": 12},
+        {"radius_xy": 3, "radius_axial": 8},
+        {"radius_xy": 8, "radius_axial": 20}]
 
-print("\nIDEAL BUBBLE\n-----------------")
+    diameter = 25
+    expected_ex = 2.0
+    expected_ey = -3.0
 
-diameter = 25
-z_idx = 2
+    for i, case in enumerate(test_cases, start=1):
 
-expected_ex = 2.0
-expected_ey = -3.0
+        print(f"\nIDEAL BUBBLE TEST {i}")
+        print("----------------------------")
 
-points = generate_ideal_bubble(radius_xy=5, radius_axial=12, center=(expected_ex, expected_ey, 0.0), n_points=30000)
+        points = generate_ideal_bubble(radius_xy=case["radius_xy"], radius_axial=case["radius_axial"], center=(expected_ex, expected_ey, 0.0), n_points=30000)
 
-e_star, e_x, e_y = calculate_bubble_eccentricity(points, pipe_center=(0.0, 0.0), diameter=diameter)[0]
-expected_e_star = (2.0 / diameter) * np.sqrt(expected_ex**2 + expected_ey**2)
+        e_star, e_x, e_y = calculate_bubble_eccentricity(points, pipe_center=(0.0, 0.0), diameter=diameter)[0]
 
-print("\nEXPECTED")
-print(f"e_x = {expected_ex:.3f}")
-print(f"e_y = {expected_ey:.3f}")
+        expected_e_star = (2.0 / diameter) * np.sqrt(expected_ex**2 + expected_ey**2)
 
-print("\nMEASURED")
-print(f"e*  = {e_star:.3f}")
-print(f"e_x = {e_x:.3f}")
-print(f"e_y = {e_y:.3f}")
-print(f"expected e* = {expected_e_star:.3f}")
-print(f"error ex = {abs(e_x - expected_ex):.3f}")
-print(f"error ey = {abs(e_y - expected_ey):.3f}")
-print(f"error e* = {abs(e_star - expected_e_star):.3f}")
-print(f"relative error ex = {100 * abs(e_x - expected_ex) / abs(expected_ex):.2f}%")
-print(f"relative error ey = {100 * abs(e_y - expected_ey) / abs(expected_ey):.2f}%")
-print(f"relative error e* = {100 * abs(e_star - expected_e_star) / abs(expected_e_star):.2f}%")
+        print("\nEXPECTED")
+        print(f"e_x = {expected_ex:.3f}")
+        print(f"e_y = {expected_ey:.3f}")
 
-visualize_bubble_tip(points)
+        print("\nMEASURED")
+        print(f"e*  = {e_star:.3f}")
+        print(f"e_x = {e_x:.3f}")
+        print(f"e_y = {e_y:.3f}")
+        print(f"expected e* = {expected_e_star:.3f}")
+        print(f"error ex = {abs(e_x - expected_ex):.3f}")
+        print(f"error ey = {abs(e_y - expected_ey):.3f}")
+        print(f"error e* = {abs(e_star - expected_e_star):.3f}")
+        print(f"relative error ex = {100 * abs(e_x - expected_ex) / abs(expected_ex):.2f}%")
+        print(f"relative error ey = {100 * abs(e_y - expected_ey) / abs(expected_ey):.2f}%")
+        print(f"relative error e* = {100 * abs(e_star - expected_e_star) / abs(expected_e_star):.2f}%")
 
-# ==========================================
-# ACTUAL BUBBLE
-# ==========================================
+        visualize_bubble_tip(points)
+        
+def actual_bubble_testing(
+    ply_filename: str,
+    bubble_count: int = 3,
+    diameter: float = 25,
+    tip_percentile: float = 99.0):
 
-print("\nACTUAL BUBBLES\n------------------")
+    print("\nACTUAL BUBBLES\n------------------")
 
-ply_filename = r"C:\Users\Mateusz\Desktop\CODE\Bubble\sandbox\3Dcloud_tube34.ply"
-points = pv.read(ply_filename).points
+    points = pv.read(ply_filename).points
 
-bubble_count = 3
+    results = calculate_bubble_eccentricity(
+        points,
+        bubble_count=bubble_count,
+        pipe_center=(0.0, 0.0),
+        diameter=diameter,
+        tip_percentile=tip_percentile,
+        debug=True)
 
-results = calculate_bubble_eccentricity(
-    points,
-    bubble_count=bubble_count,
-    pipe_center=(0.0, 0.0),
-    diameter=25,
-    tip_percentile=99.0,
-    debug=True
-)
+    print("\nSUMMARY")
 
-print("\nSUMMARY")
-for i, (e_star, e_x, e_y) in enumerate(results):
-    print(
-        f"Bubble {i+1}: "
-        f"e*={e_star:.3f}, "
-        f"e_x={e_x:.3f}, "
-        f"e_y={e_y:.3f}"
+    for i, (e_star, e_x, e_y) in enumerate(results):
+
+        print(
+            f"Bubble {i+1}: "
+            f"e*={e_star:.3f}, "
+            f"e_x={e_x:.3f}, "
+            f"e_y={e_y:.3f}"
+        )
+
+    visualize_bubble_tip(
+        points,
+        bubble_count=bubble_count,
+        tip_percentile=tip_percentile)
+
+if __name__ == "__main__":
+
+    ideal_testing()
+
+    actual_bubble_testing(
+        ply_filename=r"C:\Users\Mateusz\Desktop\CODE\Bubble\sandbox\3Dcloud_tube34.ply",
+        bubble_count=3,
+        diameter=25,
+        tip_percentile=99.0
     )
-
-visualize_bubble_tip(points, bubble_count=bubble_count, tip_percentile=99.0)
