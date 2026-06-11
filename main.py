@@ -889,6 +889,148 @@ def reconstruct_pair_no_stick(rect_top: np.ndarray,
 
 
 # ==========================================
+# Rotational Fit Score: współczynnik dopasowania bryły obrotowej
+# ==========================================
+
+def volume_to_surface_points_mm(volume_bool: np.ndarray,
+                                voxel_mm: float,
+                                center_radial_xy: bool = True,
+                                max_points: int = 500_000):
+
+    if volume_bool is None or volume_bool.sum() == 0:
+        return None
+
+    try:
+        from scipy.ndimage import binary_erosion
+        eroded = binary_erosion(volume_bool)
+    except Exception:
+        # Fallback without SciPy: simple erosion using OpenCV slice by slice
+        eroded = volume_bool.copy()
+
+        # Remove boundary voxels by checking six direct neighbours
+        inner = np.zeros_like(volume_bool, dtype=bool)
+        inner[1:-1, 1:-1, 1:-1] = (
+            volume_bool[1:-1, 1:-1, 1:-1] &
+            volume_bool[:-2, 1:-1, 1:-1] &
+            volume_bool[2:, 1:-1, 1:-1] &
+            volume_bool[1:-1, :-2, 1:-1] &
+            volume_bool[1:-1, 2:, 1:-1] &
+            volume_bool[1:-1, 1:-1, :-2] &
+            volume_bool[1:-1, 1:-1, 2:]
+        )
+        eroded = inner
+
+    surface = volume_bool & ~eroded
+
+    return volume_to_points_mm(
+        surface,
+        voxel_mm,
+        center_radial_xy=center_radial_xy,
+        max_points=max_points
+    )
+def rotational_fit_score(points: np.ndarray,
+                         n_sections: int = 50,
+                         min_points_per_section: int = 5,
+                         radius_statistic: str = "median"):
+    """
+    Computes the rotational fit coefficient of a bubble.
+
+    points: surface point cloud of a single bubble, shape (N, 3)
+    n_sections: number of cross-sections along the main axis
+    min_points_per_section: minimum number of points required in one section
+
+    return:
+        score      - the closer to 1, the more rotationally symmetric the shape is
+        mean_error - mean radial deviation [mm]
+        R          - reference mean radius [mm]
+    """
+    if points is None or len(points) < 10:
+        return 0.0, None, None
+
+    pts = np.asarray(points, dtype=np.float64)
+
+    # 1. Move the bubble to its own local centre
+    centroid = pts.mean(axis=0)
+    centered = pts - centroid
+
+    # 2. Estimate the main axis using PCA
+    cov = np.cov(centered.T)
+    eigvals, eigvecs = np.linalg.eigh(cov)
+
+    # The eigenvector with the largest eigenvalue is the main axis
+    main_axis = eigvecs[:, np.argmax(eigvals)]
+    main_axis = main_axis / np.linalg.norm(main_axis)
+
+    # 3. Project points onto the main axis
+    # This gives the local position of each point along the bubble axis
+    z_local = centered @ main_axis
+
+    # 4. Compute radial distance of each point from the main axis
+    parallel = np.outer(z_local, main_axis)
+    radial_vec = centered - parallel
+    radii = np.linalg.norm(radial_vec, axis=1)
+
+    # 5. Divide the bubble into cross-sections along the main axis
+    z_min, z_max = z_local.min(), z_local.max()
+
+    if np.isclose(z_min, z_max):
+        return 0.0, None, None
+
+    bins = np.linspace(z_min, z_max, n_sections + 1)
+
+    section_ids = np.digitize(z_local, bins) - 1
+    section_ids = np.clip(section_ids, 0, n_sections - 1)
+
+    # Radius profile of the ideal rotational solid
+    r_profile = np.full(n_sections, np.nan)
+
+    for k in range(n_sections):
+        mask = section_ids == k
+
+        if np.sum(mask) >= min_points_per_section:
+            if radius_statistic == "percentile":
+                r_profile[k] = np.percentile(radii[mask], 95)
+            else:
+                r_profile[k] = np.median(radii[mask])
+
+    # If too few sections contain data, the result is unreliable
+    valid_sections = ~np.isnan(r_profile)
+
+    if np.sum(valid_sections) < 3:
+        return 0.0, None, None
+
+    # 6. Fill missing cross-sections by interpolation
+    xs = np.arange(n_sections)
+
+    r_profile[~valid_sections] = np.interp(
+        xs[~valid_sections],
+        xs[valid_sections],
+        r_profile[valid_sections]
+    )
+
+    # 7. Assign ideal radius to every point based on its section
+    r_ideal_for_points = r_profile[section_ids]
+
+    # 8. Compute radial deviation from the ideal rotational profile
+    errors = np.abs(radii - r_ideal_for_points)
+
+    mean_error = np.mean(errors)
+
+    # Reference mean radius
+    R = np.mean(r_profile)
+
+    if R <= 1e-9:
+        return 0.0, float(mean_error), float(R)
+
+    # Normalized rotational fit score
+    score = 1.0 - mean_error / R
+
+    # Clamp score to range 0-1
+    score = float(np.clip(score, 0.0, 1.0))
+
+    return score, float(mean_error), float(R)
+
+# ==========================================
 # MAIN: wybór startu po numerze klatki (1-based)
 # ==========================================
 def main(dataset_dir="bubble.coco/train",
@@ -1034,6 +1176,37 @@ def main(dataset_dir="bubble.coco/train",
             iou_thr=IOU_THR
         )
 
+        # --- rotational fit score ---
+        pts_12 = volume_to_surface_points_mm(vol_12, voxel_mm_12)
+
+        score_12, mean_error_12, R_12 = rotational_fit_score(
+            pts_12,
+            n_sections=50,
+            min_points_per_section=5
+        )
+
+        pts_34 = volume_to_surface_points_mm(vol_34, voxel_mm_34)
+
+        score_34, mean_error_34, R_34 = rotational_fit_score(
+            pts_34,
+            n_sections=50,
+            min_points_per_section=5
+        )
+
+        print(
+            f"Rotational fit tube12: "
+            f"score={score_12:.3f}, "
+            f"mean_error={mean_error_12 if mean_error_12 is not None else 0:.3f} mm, "
+            f"R={R_12 if R_12 is not None else 0:.3f} mm"
+        )
+
+        print(
+            f"Rotational fit tube34: "
+            f"score={score_34:.3f}, "
+            f"mean_error={mean_error_34 if mean_error_34 is not None else 0:.3f} mm, "
+            f"R={R_34 if R_34 is not None else 0:.3f} mm"
+        )
+
         # --- cylindrical pipe as real cylinder based on rectified tube coordinates ---
         # Coordinate system after conversion:
         #   X,Y = radial circular cross-section, Z = long pipe axis.
@@ -1089,6 +1262,8 @@ def main(dataset_dir="bubble.coco/train",
     )
 
 
+
+
 if __name__ == "__main__":
     # start_frame = numer w posortowanej liście (1-based)
     main(
@@ -1097,3 +1272,4 @@ if __name__ == "__main__":
         save_masks=False,
         save_point_clouds=True
     )
+
