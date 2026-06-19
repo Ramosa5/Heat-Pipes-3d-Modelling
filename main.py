@@ -1030,6 +1030,92 @@ def rotational_fit_score(points: np.ndarray,
 
     return score, float(mean_error), float(R)
 
+
+# ==========================================
+# Validate Fit Score: tworzenie sztucznych modeli w celu sprawdzenia funkcji fit_score
+# ==========================================
+def validate_existing_rotational_fit_score():
+    """
+    Simple validation of the existing rotational_fit_score() function
+    using synthetic point clouds with known geometry.
+    """
+
+    # ---------- 1. Ideal rotational shape: ellipsoid of revolution ----------
+    length_mm = 30.0
+    radius_mm = 7.0
+
+    n_z = 80
+    n_theta = 120
+
+    z_values = np.linspace(-length_mm / 2.0, length_mm / 2.0, n_z)
+    theta_values = np.linspace(0.0, 2.0 * np.pi, n_theta, endpoint=False)
+
+    ideal_points = []
+
+    for z in z_values:
+        z_norm = z / (length_mm / 2.0)
+        r = radius_mm * np.sqrt(max(0.0, 1.0 - z_norm ** 2))
+
+        for theta in theta_values:
+            x = r * np.cos(theta)
+            y = r * np.sin(theta)
+            ideal_points.append([x, y, z])
+
+    ideal_points = np.asarray(ideal_points, dtype=np.float64)
+
+    ideal_score, ideal_error, ideal_R = rotational_fit_score(
+        ideal_points,
+        n_sections=50,
+        min_points_per_section=5,
+        radius_statistic="median"
+    )
+
+    # ---------- 2. Same shape, but shifted in space ----------
+    shifted_points = ideal_points + np.array([100.0, -50.0, 200.0])
+
+    shifted_score, shifted_error, shifted_R = rotational_fit_score(
+        shifted_points,
+        n_sections=50,
+        min_points_per_section=5,
+        radius_statistic="median"
+    )
+
+    # ---------- 3. Asymmetric shape ----------
+    asymmetric_points = []
+
+    asymmetry = 0.35
+
+    for z in z_values:
+        z_norm = z / (length_mm / 2.0)
+        base_r = radius_mm * np.sqrt(max(0.0, 1.0 - z_norm ** 2))
+
+        for theta in theta_values:
+            # Radius depends on angle, so this is no longer rotationally symmetric
+            r = base_r * (1.0 + asymmetry * np.cos(2.0 * theta))
+
+            x = r * np.cos(theta)
+            y = r * np.sin(theta)
+            asymmetric_points.append([x, y, z])
+
+    asymmetric_points = np.asarray(asymmetric_points, dtype=np.float64)
+
+    asym_score, asym_error, asym_R = rotational_fit_score(
+        asymmetric_points,
+        n_sections=50,
+        min_points_per_section=5,
+        radius_statistic="median"
+    )
+
+    print("\n=== Validation of rotational_fit_score() ===")
+    print(f"Ideal rotational shape: score={ideal_score:.4f}, error={ideal_error:.4f} mm, R={ideal_R:.4f} mm")
+    print(f"Shifted same shape:      score={shifted_score:.4f}, error={shifted_error:.4f} mm, R={shifted_R:.4f} mm")
+    print(f"Asymmetric shape:        score={asym_score:.4f}, error={asym_error:.4f} mm, R={asym_R:.4f} mm")
+
+    print("\nExpected:")
+    print("- ideal score should be close to 1")
+    print("- shifted score should be almost the same as ideal score")
+    print("- asymmetric score should be lower than ideal score")
+
 # ==========================================
 # MAIN: wybór startu po numerze klatki (1-based)
 # ==========================================
@@ -1266,6 +1352,7 @@ def main(dataset_dir="bubble.coco/train",
 
 if __name__ == "__main__":
     # start_frame = numer w posortowanej liście (1-based)
+    #validate_existing_rotational_fit_score()
     main(
         start_frame=100,  # <- ustaw np. 475
         n_frames=10,
