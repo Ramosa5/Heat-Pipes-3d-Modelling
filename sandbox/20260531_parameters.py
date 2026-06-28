@@ -334,7 +334,7 @@ if __name__ == "__main__":
     ideal_testing()
 
     actual_bubble_testing(
-        ply_filename=r"C:\Users\Mateusz\Desktop\CODE\Bubble\sandbox\3Dcloud_tube34.ply",
+        ply_filename="3Dcloud_tube34.ply",
         bubble_count=3,
         diameter=25,
         tip_percentile=99.0
