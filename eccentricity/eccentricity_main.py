@@ -1,4 +1,6 @@
 import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.ticker import MultipleLocator
 
 def calculate_bubble_eccentricity(
     points_mm: np.ndarray, 
@@ -25,7 +27,7 @@ def calculate_bubble_eccentricity(
     
     if points_mm is None or len(points_mm) == 0:
         return {
-            "front_eccentricity": None, "back_eccentricity": None,
+            "front_eccentricity, -": None, "back_eccentricity, -": None,
             "front_shift": (None, None), "back_shift": (None, None),
             "front_clipped": False, "back_clipped": False
         }
@@ -99,8 +101,8 @@ def calculate_bubble_eccentricity(
         e_star_back, back_shift = None, (None, None)
 
     return {
-        "front_eccentricity": e_star_front,
-        "back_eccentricity": e_star_back,
+        "front_eccentricity, -": e_star_front,
+        "back_eccentricity, -": e_star_back,
         "front_shift": front_shift,
         "back_shift": back_shift,
         "front_clipped": bool(is_front_clipped),
@@ -145,10 +147,18 @@ def generate_synthetic_bubble(
     return points
 
 def test_eccentricity_accuracy(
-    diameter_mm: float, 
-    window_length_mm: float, 
-    offsets_mm: np.ndarray = np.linspace(0, 8, 17), 
-    n_trials: int = 100) -> dict:
+    radius_x: float = 2.0, 
+    radius_y: float = 2.0, 
+    length_z: float = 30.0, 
+    diameter_mm: float = 20.0,
+    window_length_mm: float = 120.0,
+    offsets_mm: np.ndarray | None = None,
+    n_trials: int = 100
+) -> dict:
+
+    if offsets_mm is None:
+        max_offset = diameter_mm / 2.0 - radius_x
+        offsets_mm = np.linspace(0.0, max_offset, 21)
 
     expected = []
     measured_front = []
@@ -160,13 +170,20 @@ def test_eccentricity_accuracy(
 
         for _ in range(n_trials):
 
-            bubble = generate_synthetic_bubble(radius_x=8.0, radius_y=8.0, length_z=30.0, offset_x=offset, offset_y=0.0, center_z=50.0)
+            bubble = generate_synthetic_bubble(
+                radius_x=radius_x,
+                radius_y=radius_y,
+                length_z=length_z,
+                offset_x=offset,
+                offset_y=0.0,
+                center_z=50.0
+            )
 
             result = calculate_bubble_eccentricity(bubble, diameter_mm, window_length_mm)
 
             expected.append(expected_value)
-            measured_front.append(result["front_eccentricity"])
-            measured_back.append(result["back_eccentricity"])
+            measured_front.append(result["front_eccentricity, -"])
+            measured_back.append(result["back_eccentricity, -"])
 
     return {
         "expected": np.asarray(expected),
@@ -174,8 +191,11 @@ def test_eccentricity_accuracy(
         "back": np.asarray(measured_back)
     }
     
-def test_noise_robustness(diameter_mm: float, 
-    window_length_mm: float, 
+def test_noise_robustness(radius_x: float = 2.0, 
+    radius_y: float = 2.0, 
+    length_z: float = 30.0, 
+    diameter_mm: float = 20.0,
+    window_length_mm: float = 120.0,
     offset_x: float = 3.0, 
     offset_y: float = 2.0, 
     sigma_values: np.ndarray = np.linspace(0, 0.5, 11), 
@@ -196,12 +216,20 @@ def test_noise_robustness(diameter_mm: float,
 
         for _ in range(n_trials):
 
-            bubble = generate_synthetic_bubble(radius_x=8.0, radius_y=8.0, length_z=30.0, offset_x=offset_x, offset_y=offset_y, center_z=50.0, volume_noise_sigma=sigma)
+            bubble = generate_synthetic_bubble(
+                radius_x=radius_x,
+                radius_y=radius_y,
+                length_z=length_z,
+                offset_x=offset_x,
+                offset_y=offset_y,
+                center_z=50.0,
+                volume_noise_sigma=sigma
+            )
 
             result = calculate_bubble_eccentricity(bubble, diameter_mm, window_length_mm)
 
-            front.append(result["front_eccentricity"])
-            back.append(result["back_eccentricity"])
+            front.append(result["front_eccentricity, -"])
+            back.append(result["back_eccentricity, -"])
 
         mean_front.append(np.mean(front))
         std_front.append(np.std(front))
@@ -220,62 +248,122 @@ def test_noise_robustness(diameter_mm: float,
     
 def plot_accuracy(results: dict):
 
-    import matplotlib.pyplot as plt
-
     plt.figure(figsize=(6, 6))
 
-    plt.scatter(results["expected"], results["front"], s=8, alpha=0.5, label="Front")
-    plt.scatter(results["expected"], results["back"], s=8, alpha=0.5, label="Back")
+    plt.plot(
+        [0, 1],
+        [0, 1],
+        color="black",
+        linestyle="--",
+        linewidth=1.2,
+        label="Ideal",
+        zorder=1
+    )
+    
+    plt.scatter(results["expected"], results["front"], s=5, alpha=0.35, label="Front")
+    plt.scatter(results["expected"], results["back"], s=5, alpha=0.65, label="Back")
 
-    lim = [0, max(results["expected"]) * 1.05]
+    #lim = [0, max(results["expected"]) * 1.05]
+    #lim = [0.0, 1.05]
+    
+    ax = plt.gca()
 
-    plt.plot(lim, lim, "--", linewidth=2)
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_aspect("equal", adjustable="box")
 
-    plt.xlim(lim)
-    plt.ylim(lim)
+    # Major ticks every 0.1
+    ax.xaxis.set_major_locator(MultipleLocator(0.1))
+    ax.yaxis.set_major_locator(MultipleLocator(0.1))
 
-    plt.xlabel("Expected eccentricity")
-    plt.ylabel("Measured eccentricity")
+    # Optional: minor ticks every 0.05
+    ax.xaxis.set_minor_locator(MultipleLocator(0.05))
+    ax.yaxis.set_minor_locator(MultipleLocator(0.05))
 
-    plt.legend()
+    ax.grid(True, which="major", linewidth=0.8)
+    ax.grid(True, which="minor", linewidth=0.3, alpha=0.3)
 
-    plt.grid(True)
+    ax.set_xlabel("Expected eccentricity, -")
+    ax.set_ylabel("Measured eccentricity, -")
+    
+    ax.tick_params(direction="in", top=True, right=True)
+    ax.legend(frameon=False)
+
+    ax.legend()
 
     plt.tight_layout()
     plt.show()
     
 def plot_noise(results: dict):
 
-    import matplotlib.pyplot as plt
+    plt.figure(figsize=(6, 6))
 
-    plt.figure(figsize=(7, 5))
+    ax = plt.gca()
+    ax.set_box_aspect(1)
+    
+    ax.plot(results["sigma"], results["front_mean"], linewidth=2, label="Front eccentricity (mean ±1σ)")
+    ax.fill_between(results["sigma"], results["front_mean"] - results["front_std"], results["front_mean"] + results["front_std"], alpha=0.20)
 
-    plt.plot(results["sigma"], results["front_mean"], label="Front")
-    plt.fill_between(results["sigma"], results["front_mean"] - results["front_std"], results["front_mean"] + results["front_std"], alpha=0.25)
+    ax.plot(results["sigma"], results["back_mean"], linewidth=2, label="Back eccentricity (mean ±1σ)")
+    ax.fill_between(results["sigma"], results["back_mean"] - results["back_std"], results["back_mean"] + results["back_std"], alpha=0.20)
 
-    plt.plot(results["sigma"], results["back_mean"], label="Back")
-    plt.fill_between(results["sigma"], results["back_mean"] - results["back_std"], results["back_mean"] + results["back_std"], alpha=0.25)
+    ax.axhline(results["expected"], color="black", linestyle="--", linewidth=1.2, label="True value")
 
-    plt.axhline(results["expected"], linestyle="--", label="Expected")
+    ax.set_xlabel("Noise standard deviation, mm")
+    ax.set_ylabel("Bubble eccentricity, -")
 
-    plt.xlabel("Surface noise σ, mm")
-    plt.ylabel("Measured eccentricity")
+    #ax.set_xlim(results["sigma"][0], results["sigma"][-1])
 
-    plt.grid(True)
-    plt.legend()
+    step = 0.1
+
+    y = np.concatenate([
+        results["front_mean"],
+        results["back_mean"],
+        [results["expected"]]
+    ])
+
+    ymin = np.floor(np.min(y) / step) * step
+    ymax = np.ceil(np.max(y) / step) * step
+
+    ax.set_ylim(ymin, ymax)
+
+    ax.xaxis.set_major_locator(MultipleLocator(0.05))
+    ax.xaxis.set_minor_locator(MultipleLocator(0.01))
+
+    ax.yaxis.set_major_locator(MultipleLocator(0.01))
+    ax.yaxis.set_minor_locator(MultipleLocator(0.025))
+
+    ax.grid(True, which="major", linewidth=0.8)
+    ax.grid(True, which="minor", linewidth=0.3, alpha=0.3)
+
+    ax.tick_params(direction="in", top=True, right=True)
+    
+    ax.legend(frameon=False)
 
     plt.tight_layout()
     plt.show()
     
 if __name__ == "__main__":
+    
     DIAMETER_MM = 20.0
     WINDOW_LENGTH = 100.0
+    RADIUS_X = 2
+    RADIUS_Y = 2
+    
     np.random.seed(42)
 
-    accuracy = test_eccentricity_accuracy(DIAMETER_MM, WINDOW_LENGTH)
+    accuracy = test_eccentricity_accuracy(radius_x=RADIUS_X, radius_y=RADIUS_Y, length_z=30.0, diameter_mm=DIAMETER_MM, window_length_mm=WINDOW_LENGTH)
+     
     plot_accuracy(accuracy)
 
-    noise = test_noise_robustness(DIAMETER_MM, WINDOW_LENGTH)
+    noise = test_noise_robustness(
+        radius_x=RADIUS_X,
+        radius_y=RADIUS_Y,
+        length_z=30.0,
+        diameter_mm=DIAMETER_MM,
+        window_length_mm=WINDOW_LENGTH
+    )   
+     
     plot_noise(noise)
 
     front_rmse = np.sqrt(np.mean((accuracy["front"] - accuracy["expected"])**2))
@@ -295,3 +383,19 @@ if __name__ == "__main__":
     
     print(f"Front MAE: {front_mae:.5f}")
     print(f"Back MAE:  {back_mae:.5f}")
+    
+    ss_res_front = np.sum((accuracy["front"] - accuracy["expected"])**2)
+    ss_tot = np.sum((accuracy["expected"] - np.mean(accuracy["expected"]))**2)
+    r2_front = 1.0 - ss_res_front / ss_tot
+
+    ss_res_back = np.sum((accuracy["back"] - accuracy["expected"])**2)
+    r2_back = 1.0 - ss_res_back / ss_tot
+
+    print(f"Front R²: {r2_front:.5f}")
+    print(f"Back  R²: {r2_back:.5f}")
+    
+    front_error = np.abs(accuracy["front"] - accuracy["expected"])
+    back_error = np.abs(accuracy["back"] - accuracy["expected"])
+
+    print(f"Front 95th percentile error: {np.percentile(front_error,95):.5f}")
+    print(f"Back 95th percentile error:  {np.percentile(back_error,95):.5f}")
