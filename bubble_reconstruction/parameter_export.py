@@ -1,0 +1,55 @@
+from __future__ import annotations
+
+import csv
+import os
+from pathlib import Path
+from typing import Iterable
+
+
+ECCENTRICITY_FIELDS = [
+    "frame_no",
+    "file_name",
+    "tube_pair",
+    "bubble_index",
+    "bubble_count",
+    "e_star",
+    "e_x_mm",
+    "e_y_mm",
+    "tip_percentile",
+    "diameter_mm",
+]
+
+MASK_PARAMETER_FIELDS = [
+    "frame_no",
+    "file_name",
+    "tube_pair",
+    "view",
+    "diameter_mm",
+    "mm_per_pixel",
+    "columns_total",
+    "columns_nonzero",
+    "avg_height_mm",
+    "max_height_mm",
+    "avg_alpha_filled",
+    "avg_alpha_empty",
+    "avg_s_filled_mm",
+    "avg_s_interface_mm",
+]
+
+
+def append_dict_rows(path: str | os.PathLike[str], rows: Iterable[dict[str, object]], fieldnames: list[str]) -> None:
+    rows = list(rows)
+    if not rows:
+        return
+
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not out_path.exists() or out_path.stat().st_size == 0
+
+    with out_path.open("a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        if write_header:
+            writer.writeheader()
+        writer.writerows(rows)
+
+    print(f"[SAVE] Appended {len(rows)} parameter rows: {out_path}")

@@ -31,6 +31,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--point-clouds-dir", default="point_clouds")
 
     parser.add_argument(
+        "--eccentricity",
+        action="store_true",
+        help="Calculate eccentricity and frame parameters for each processed frame.",
+    )
+    parser.add_argument("--parameters-dir", default="parameters")
+    parser.add_argument("--tip-percentile", type=float, default=99.0)
+    parser.add_argument(
+        "--eccentricity-debug",
+        action="store_true",
+        help="Print detailed eccentricity diagnostics for each bubble.",
+    )
+    parser.add_argument(
+        "--eccentricity-visualize",
+        action="store_true",
+        help="Show PyVista eccentricity visualization: full cloud gray, tip red, median point blue.",
+    )
+    parser.add_argument(
+        "--eccentricity-visualize-every",
+        type=int,
+        default=1,
+        help="Visualize eccentricity every Nth processed global frame. Default: 1.",
+    )
+    parser.add_argument(
+        "--eccentricity-visualize-max-points",
+        type=int,
+        default=200_000,
+        help="Maximum points shown in eccentricity visualization per tube pair.",
+    )
+
+    parser.add_argument(
         "--validate-fit-score",
         action="store_true",
         help="Run synthetic validation of rotational_fit_score() and exit.",
@@ -55,6 +85,13 @@ def build_config(args: argparse.Namespace) -> ReconstructionConfig:
         iou_thr=args.iou_thr,
         masks_dir=args.masks_dir,
         point_clouds_dir=args.point_clouds_dir,
+        eccentricity=args.eccentricity or args.eccentricity_visualize,
+        parameters_dir=args.parameters_dir,
+        tip_percentile=args.tip_percentile,
+        eccentricity_debug=args.eccentricity_debug,
+        eccentricity_visualize=args.eccentricity_visualize,
+        eccentricity_visualize_every=args.eccentricity_visualize_every,
+        eccentricity_visualize_max_points=args.eccentricity_visualize_max_points,
     )
 
 

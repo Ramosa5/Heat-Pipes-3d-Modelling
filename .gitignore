@@ -1,2 +1,4 @@
 /masks
 /point_clouds
+*.pyc
+*.csv

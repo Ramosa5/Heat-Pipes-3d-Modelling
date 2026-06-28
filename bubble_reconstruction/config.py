@@ -49,6 +49,20 @@ class ReconstructionConfig:
     masks_dir: str = "masks"
     point_clouds_dir: str = "point_clouds"
 
+    # Optional frame-by-frame eccentricity/parameter calculation.
+    # Enabled from CLI with --eccentricity.
+    eccentricity: bool = False
+    parameters_dir: str = "parameters"
+    eccentricity_csv: str = "eccentricity_parameters.csv"
+    mask_parameters_csv: str = "mask_parameters.csv"
+    tip_percentile: float = 99.0
+    eccentricity_debug: bool = False
+    # Optional PyVista visualization of eccentricity tip regions.
+    # Enabled from CLI with --eccentricity-visualize.
+    eccentricity_visualize: bool = False
+    eccentricity_visualize_every: int = 1
+    eccentricity_visualize_max_points: int = 200_000
+
     center_radial_xy: bool = True
     preview_max_points: int = 200_000
     preview_point_size: float = 3.0

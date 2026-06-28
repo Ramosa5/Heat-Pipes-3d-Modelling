@@ -226,3 +226,97 @@ def pv_live_animate_keep_last(frames_data,
     # NOW keep last frame until window is closed:
     # This call blocks and keeps the current scene (last frame).
     p.show(auto_close=True)
+
+
+
+def visualize_bubble_tip(points: np.ndarray | None,
+                         bubble_count: int = 1,
+                         tip_percentile: float = 99.0,
+                         title: str = "Bubble tip eccentricity",
+                         max_points: int = 200_000,
+                         point_size: float = 2.0,
+                         tip_point_size: float = 8.0,
+                         median_radius_mm: float = 1.0) -> None:
+    """
+    Visualize eccentricity calculation in the same style as the original script:
+    - full reconstructed point cloud: light gray,
+    - selected tip region: red,
+    - median eccentricity point: blue sphere.
+
+    The bubble separation follows the same largest-Z-gaps logic as
+    calculate_bubble_eccentricity(), so the visualized regions match the CSV rows.
+    """
+    if points is None:
+        print("[ECC-VIS] No points to visualize.")
+        return
+
+    pts = np.asarray(points, dtype=np.float32)
+    if pts.ndim != 2 or pts.shape[1] != 3 or len(pts) == 0:
+        print("[ECC-VIS] Empty or invalid point cloud, skipping visualization.")
+        return
+
+    if len(pts) > max_points:
+        idx = np.random.choice(len(pts), int(max_points), replace=False)
+        pts = pts[idx]
+
+    bubble_count = max(1, int(bubble_count))
+    z_idx = 2
+    sort_idx = np.argsort(pts[:, z_idx])
+    sorted_z = pts[:, z_idx][sort_idx]
+
+    if bubble_count > 1 and len(sorted_z) > bubble_count:
+        gaps = np.diff(sorted_z)
+        gap_idxs = np.argsort(gaps)[-(bubble_count - 1):]
+        split_idxs = np.sort(gap_idxs) + 1
+        bubble_point_indices = np.split(sort_idx, split_idxs)
+    else:
+        bubble_point_indices = [sort_idx]
+
+    plotter = pv.Plotter(title=title)
+    plotter.add_text(title, font_size=12)
+
+    plotter.add_points(
+        pts,
+        color="lightgray",
+        point_size=float(point_size),
+        opacity=0.15,
+        render_points_as_spheres=True,
+    )
+
+    for i, idxs in enumerate(bubble_point_indices, start=1):
+        bubble_points = pts[idxs]
+        if len(bubble_points) == 0:
+            continue
+
+        threshold = np.percentile(bubble_points[:, z_idx], tip_percentile)
+        tip_points = bubble_points[bubble_points[:, z_idx] >= threshold]
+        if len(tip_points) == 0:
+            continue
+
+        median_point = np.median(tip_points, axis=0)
+
+        plotter.add_points(
+            tip_points,
+            color="red",
+            point_size=float(tip_point_size),
+            opacity=0.75,
+            render_points_as_spheres=True,
+        )
+        plotter.add_mesh(
+            pv.Sphere(radius=float(median_radius_mm), center=median_point),
+            color="blue",
+        )
+        try:
+            plotter.add_point_labels(
+                [median_point],
+                [f"B{i}"],
+                point_size=0,
+                font_size=12,
+                text_color="blue",
+            )
+        except Exception:
+            pass
+
+    plotter.add_axes()
+    plotter.show_grid()
+    plotter.show()

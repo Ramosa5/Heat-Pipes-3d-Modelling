@@ -9,11 +9,18 @@ from .coco_utils import build_bubble_mask_from_anns, load_coco
 from .config import ReconstructionConfig
 from .export_io import safe_stem, save_mask, save_point_cloud_from_volume
 from .fit_score import rotational_fit_score
+from .bubble_physics import summarize_rectified_mask_parameters
+from .eccentricity import eccentricity_records_for_points
+from .parameter_export import (
+    ECCENTRICITY_FIELDS,
+    MASK_PARAMETER_FIELDS,
+    append_dict_rows,
+)
 from .pipe import build_pipe_cylinder_mesh_from_rectified_shape
 from .reconstruction import reconstruct_pair_no_stick
 from .rectification import rectify_and_align_pair
 from .tube_geometry import point_in_tube
-from .volume import volume_to_surface_points_mm
+from .volume import volume_to_points_mm, volume_to_surface_points_mm
 
 
 def find_category_id(categories: list[dict[str, Any]], category_name: str) -> int:
@@ -92,6 +99,116 @@ def reconstruct_and_score_pair(rect_top,
     return volume, voxel_mm, n_pairs, score, mean_error, radius
 
 
+
+
+def calculate_and_save_frame_parameters(file_name: str,
+                                        frame_no: int,
+                                        rect_top_12,
+                                        rect_side_12,
+                                        rect_top_34,
+                                        rect_side_34,
+                                        vol_12,
+                                        voxel_mm_12: float,
+                                        n_pairs_12: int,
+                                        vol_34,
+                                        voxel_mm_34: float,
+                                        n_pairs_34: int,
+                                        config: ReconstructionConfig) -> None:
+    """Calculate eccentricity and mask-derived parameters for one processed frame."""
+    if not config.eccentricity:
+        return
+
+    eccentricity_rows: list[dict[str, object]] = []
+
+    pts_12 = volume_to_points_mm(
+        vol_12,
+        voxel_mm_12,
+        center_radial_xy=config.center_radial_xy,
+        max_points=500_000,
+    )
+    eccentricity_rows.extend(
+        eccentricity_records_for_points(
+            points=pts_12,
+            bubble_count=n_pairs_12,
+            frame_no=frame_no,
+            file_name=file_name,
+            tube_pair="tube12",
+            diameter_mm=config.diameter_mm,
+            tip_percentile=config.tip_percentile,
+            pipe_center=(0.0, 0.0),
+            debug=config.eccentricity_debug,
+        )
+    )
+
+    pts_34 = volume_to_points_mm(
+        vol_34,
+        voxel_mm_34,
+        center_radial_xy=config.center_radial_xy,
+        max_points=500_000,
+    )
+    eccentricity_rows.extend(
+        eccentricity_records_for_points(
+            points=pts_34,
+            bubble_count=n_pairs_34,
+            frame_no=frame_no,
+            file_name=file_name,
+            tube_pair="tube34",
+            diameter_mm=config.diameter_mm,
+            tip_percentile=config.tip_percentile,
+            pipe_center=(0.0, 0.0),
+            debug=config.eccentricity_debug,
+        )
+    )
+
+    if config.eccentricity_visualize:
+        every = max(1, int(config.eccentricity_visualize_every))
+        if (frame_no - 1) % every == 0:
+            from .visualization import visualize_bubble_tip
+
+            visualize_bubble_tip(
+                pts_12,
+                bubble_count=n_pairs_12,
+                tip_percentile=config.tip_percentile,
+                title=f"Eccentricity visualization — frame {frame_no}, tube12",
+                max_points=config.eccentricity_visualize_max_points,
+            )
+            visualize_bubble_tip(
+                pts_34,
+                bubble_count=n_pairs_34,
+                tip_percentile=config.tip_percentile,
+                title=f"Eccentricity visualization — frame {frame_no}, tube34",
+                max_points=config.eccentricity_visualize_max_points,
+            )
+
+    if eccentricity_rows:
+        append_dict_rows(
+            os.path.join(config.parameters_dir, config.eccentricity_csv),
+            eccentricity_rows,
+            ECCENTRICITY_FIELDS,
+        )
+        for row in eccentricity_rows:
+            print(
+                f"[ECC] frame={row['frame_no']} {row['tube_pair']} "
+                f"bubble={row['bubble_index']}/{row['bubble_count']} "
+                f"e*={float(row['e_star']):.4f} "
+                f"e_x={float(row['e_x_mm']):.3f} mm "
+                f"e_y={float(row['e_y_mm']):.3f} mm"
+            )
+    else:
+        print(f"[ECC] frame={frame_no}: no reconstructed bubble points, no eccentricity rows saved")
+
+    mask_parameter_rows = [
+        summarize_rectified_mask_parameters(rect_top_12, config.diameter_mm, "top_yz", "tube12", frame_no, file_name),
+        summarize_rectified_mask_parameters(rect_side_12, config.diameter_mm, "side_xz", "tube12", frame_no, file_name),
+        summarize_rectified_mask_parameters(rect_top_34, config.diameter_mm, "top_yz", "tube34", frame_no, file_name),
+        summarize_rectified_mask_parameters(rect_side_34, config.diameter_mm, "side_xz", "tube34", frame_no, file_name),
+    ]
+    append_dict_rows(
+        os.path.join(config.parameters_dir, config.mask_parameters_csv),
+        mask_parameter_rows,
+        MASK_PARAMETER_FIELDS,
+    )
+
 def process_frame(img_info: dict[str, Any],
                   annotations: list[dict[str, Any]],
                   bubble_cat_id: int,
@@ -169,6 +286,22 @@ def process_frame(img_info: dict[str, Any],
         rect_side_34,
         config,
         label="tube34",
+    )
+
+    calculate_and_save_frame_parameters(
+        file_name=img_info["file_name"],
+        frame_no=global_frame_no,
+        rect_top_12=rect_top_12,
+        rect_side_12=rect_side_12,
+        rect_top_34=rect_top_34,
+        rect_side_34=rect_side_34,
+        vol_12=vol_12,
+        voxel_mm_12=voxel_mm_12,
+        n_pairs_12=n_pairs_12,
+        vol_34=vol_34,
+        voxel_mm_34=voxel_mm_34,
+        n_pairs_34=n_pairs_34,
+        config=config,
     )
 
     pipe_mesh_12 = None
