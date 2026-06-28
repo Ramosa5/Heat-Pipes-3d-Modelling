@@ -107,34 +107,191 @@ def calculate_bubble_eccentricity(
         "back_clipped": bool(is_back_clipped)
     }
     
+def generate_synthetic_bubble(
+    radius_x: float, 
+    radius_y: float, 
+    length_z: float, 
+    offset_x: float, 
+    offset_y: float, 
+    center_z: float, 
+    num_points: int = 5000, 
+    volume_noise_sigma: float = 0.0) -> np.ndarray:
     
-def calculate_all_bubble_eccentricities(
-    bubble_clouds: list[np.ndarray],
-    diameter_mm: float,
-    window_length_mm: float,
-    tip_percentile: float = 99.0,
-    edge_margin_mm: float = 0.1,
-    min_tip_points: int = 20
-) -> list[dict]:
-    """
-    Calculates eccentricity metrics for multiple bubbles, assuming input:
-    bubble_clouds = [bubble1, bubble2, bubble3]
+    points = []
 
-    Parameters:
-    - bubble_clouds: list of point clouds, where each element is an (N, 3)
-      NumPy array representing a single bubble.
+    while len(points) < num_points:
 
-    Returns:
-    - List of dictionaries returned by calculate_bubble_eccentricity().
-    """
+        xyz = np.random.uniform(-1.0, 1.0, (num_points, 3))
 
-    return [
-        calculate_bubble_eccentricity(
-            points_mm=bubble_points,
-            diameter_mm=diameter_mm,
-            window_length_mm=window_length_mm,
-            tip_percentile=tip_percentile,
-            edge_margin_mm=edge_margin_mm,
-            min_tip_points=min_tip_points)
-        for bubble_points in bubble_clouds
-    ]
+        inside = xyz[:, 0]**2 + xyz[:, 1]**2 + xyz[:, 2]**2 <= 1.0
+
+        xyz = xyz[inside]
+
+        xyz[:, 0] *= radius_x
+        xyz[:, 1] *= radius_y
+        xyz[:, 2] *= length_z / 2.0
+
+        points.extend(xyz.tolist())
+
+    points = np.asarray(points[:num_points])
+
+    if volume_noise_sigma > 0:
+        points += np.random.normal(0.0, volume_noise_sigma, points.shape)
+
+    points[:, 0] += offset_x
+    points[:, 1] += offset_y
+    points[:, 2] += center_z
+
+    return points
+
+def test_eccentricity_accuracy(
+    diameter_mm: float, 
+    window_length_mm: float, 
+    offsets_mm: np.ndarray = np.linspace(0, 8, 17), 
+    n_trials: int = 100) -> dict:
+
+    expected = []
+    measured_front = []
+    measured_back = []
+
+    for offset in offsets_mm:
+
+        expected_value = (2.0 * offset) / diameter_mm
+
+        for _ in range(n_trials):
+
+            bubble = generate_synthetic_bubble(radius_x=8.0, radius_y=8.0, length_z=30.0, offset_x=offset, offset_y=0.0, center_z=50.0)
+
+            result = calculate_bubble_eccentricity(bubble, diameter_mm, window_length_mm)
+
+            expected.append(expected_value)
+            measured_front.append(result["front_eccentricity"])
+            measured_back.append(result["back_eccentricity"])
+
+    return {
+        "expected": np.asarray(expected),
+        "front": np.asarray(measured_front),
+        "back": np.asarray(measured_back)
+    }
+    
+def test_noise_robustness(diameter_mm: float, 
+    window_length_mm: float, 
+    offset_x: float = 3.0, 
+    offset_y: float = 2.0, 
+    sigma_values: np.ndarray = np.linspace(0, 0.5, 11), 
+    n_trials: int = 100) -> dict:
+
+    expected = (2.0 / diameter_mm) * np.sqrt(offset_x**2 + offset_y**2)
+
+    mean_front = []
+    std_front = []
+
+    mean_back = []
+    std_back = []
+
+    for sigma in sigma_values:
+
+        front = []
+        back = []
+
+        for _ in range(n_trials):
+
+            bubble = generate_synthetic_bubble(radius_x=8.0, radius_y=8.0, length_z=30.0, offset_x=offset_x, offset_y=offset_y, center_z=50.0, volume_noise_sigma=sigma)
+
+            result = calculate_bubble_eccentricity(bubble, diameter_mm, window_length_mm)
+
+            front.append(result["front_eccentricity"])
+            back.append(result["back_eccentricity"])
+
+        mean_front.append(np.mean(front))
+        std_front.append(np.std(front))
+
+        mean_back.append(np.mean(back))
+        std_back.append(np.std(back))
+
+    return {
+        "sigma": sigma_values,
+        "expected": expected,
+        "front_mean": np.asarray(mean_front),
+        "front_std": np.asarray(std_front),
+        "back_mean": np.asarray(mean_back),
+        "back_std": np.asarray(std_back)
+    }
+    
+def plot_accuracy(results: dict):
+
+    import matplotlib.pyplot as plt
+
+    plt.figure(figsize=(6, 6))
+
+    plt.scatter(results["expected"], results["front"], s=8, alpha=0.5, label="Front")
+    plt.scatter(results["expected"], results["back"], s=8, alpha=0.5, label="Back")
+
+    lim = [0, max(results["expected"]) * 1.05]
+
+    plt.plot(lim, lim, "--", linewidth=2)
+
+    plt.xlim(lim)
+    plt.ylim(lim)
+
+    plt.xlabel("Expected eccentricity")
+    plt.ylabel("Measured eccentricity")
+
+    plt.legend()
+
+    plt.grid(True)
+
+    plt.tight_layout()
+    plt.show()
+    
+def plot_noise(results: dict):
+
+    import matplotlib.pyplot as plt
+
+    plt.figure(figsize=(7, 5))
+
+    plt.plot(results["sigma"], results["front_mean"], label="Front")
+    plt.fill_between(results["sigma"], results["front_mean"] - results["front_std"], results["front_mean"] + results["front_std"], alpha=0.25)
+
+    plt.plot(results["sigma"], results["back_mean"], label="Back")
+    plt.fill_between(results["sigma"], results["back_mean"] - results["back_std"], results["back_mean"] + results["back_std"], alpha=0.25)
+
+    plt.axhline(results["expected"], linestyle="--", label="Expected")
+
+    plt.xlabel("Surface noise σ, mm")
+    plt.ylabel("Measured eccentricity")
+
+    plt.grid(True)
+    plt.legend()
+
+    plt.tight_layout()
+    plt.show()
+    
+if __name__ == "__main__":
+    DIAMETER_MM = 20.0
+    WINDOW_LENGTH = 100.0
+    np.random.seed(42)
+
+    accuracy = test_eccentricity_accuracy(DIAMETER_MM, WINDOW_LENGTH)
+    plot_accuracy(accuracy)
+
+    noise = test_noise_robustness(DIAMETER_MM, WINDOW_LENGTH)
+    plot_noise(noise)
+
+    front_rmse = np.sqrt(np.mean((accuracy["front"] - accuracy["expected"])**2))
+    back_rmse = np.sqrt(np.mean((accuracy["back"] - accuracy["expected"])**2))
+
+    print(f"Front RMSE: {front_rmse:.5f}")
+    print(f"Back RMSE:  {back_rmse:.5f}")
+
+    front_bias = np.mean(accuracy["front"] - accuracy["expected"])
+    back_bias = np.mean(accuracy["back"] - accuracy["expected"])
+    
+    print(f"Front bias: {front_bias:.5f}")
+    print(f"Back bias:  {back_bias:.5f}")
+    
+    front_mae = np.mean(np.abs(accuracy["front"] - accuracy["expected"]))
+    back_mae = np.mean(np.abs(accuracy["back"] - accuracy["expected"]))
+    
+    print(f"Front MAE: {front_mae:.5f}")
+    print(f"Back MAE:  {back_mae:.5f}")
