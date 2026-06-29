@@ -349,20 +349,15 @@ if __name__ == "__main__":
     WINDOW_LENGTH = 100.0
     RADIUS_X = 2
     RADIUS_Y = 2
+    LENGTH_Z=30.0
     
     np.random.seed(42)
 
-    accuracy = test_eccentricity_accuracy(radius_x=RADIUS_X, radius_y=RADIUS_Y, length_z=30.0, diameter_mm=DIAMETER_MM, window_length_mm=WINDOW_LENGTH)
+    accuracy = test_eccentricity_accuracy(radius_x=RADIUS_X, radius_y=RADIUS_Y, length_z=LENGTH_Z, diameter_mm=DIAMETER_MM, window_length_mm=WINDOW_LENGTH)
      
     plot_accuracy(accuracy)
 
-    noise = test_noise_robustness(
-        radius_x=RADIUS_X,
-        radius_y=RADIUS_Y,
-        length_z=30.0,
-        diameter_mm=DIAMETER_MM,
-        window_length_mm=WINDOW_LENGTH
-    )   
+    noise = test_noise_robustness(radius_x=RADIUS_X, radius_y=RADIUS_Y, length_z=LENGTH_Z, diameter_mm=DIAMETER_MM, window_length_mm=WINDOW_LENGTH)   
      
     plot_noise(noise)
 
