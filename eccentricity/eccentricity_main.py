@@ -343,8 +343,240 @@ def plot_noise(results: dict):
     plt.tight_layout()
     plt.show()
     
+    
+def generate_curved_bubble(
+    diameter_mm: float = 20.0,
+    window_length_mm: float = 100.0,
+    length_z: float = 40.0,
+    radius_mm: float = 2.0,
+    centre_z: float = 50.0,
+    tip_shift=(2.5, 1.0),
+    tail_shift=(-1.5, -2.0),
+    curvature_x: float = 1.2,
+    curvature_y: float = 0.8,
+    radius_variation: float = 0.10,
+    rotation_deg: float = 15.0,
+    n_sections: int = 500,
+    points_per_section: int = 40
+):
+    """
+    Generates a smooth, realistic synthetic bubble whose centreline varies
+    continuously along its length.
+    
+    It demonstrates applicability to a more realistic, spatially varying geometry (not actual benchmark).
+    """
+
+    z = np.linspace(-length_z / 2, length_z / 2, n_sections)
+
+    cloud = []
+
+    theta_rot = np.deg2rad(rotation_deg)
+    R = np.array([[np.cos(theta_rot), -np.sin(theta_rot)], [np.sin(theta_rot),  np.cos(theta_rot)]])
+    
+    centreline_x = []
+    centreline_y = []
+
+    for zi in z:
+
+        # Smooth centreline
+        cx = curvature_x * np.sin(2 * np.pi * zi / length_z)
+        cy = curvature_y * np.cos(1.5 * np.pi * zi / length_z)
+
+        # Additional front displacement
+        w_front = np.exp(-((zi - length_z / 2) / 3.0) ** 2)
+        cx += tip_shift[0] * w_front
+        cy += tip_shift[1] * w_front
+
+        # Additional rear displacement
+        w_back = np.exp(-((zi + length_z / 2) / 3.0) ** 2)
+        cx += tail_shift[0] * w_back
+        cy += tail_shift[1] * w_back
+
+        # Slowly varying radius
+
+        r = radius_mm * (1 + radius_variation * np.sin(3 * np.pi * zi / length_z))
+        
+        pipe_radius = diameter_mm / 2.0
+
+        max_offset = pipe_radius - r
+
+        offset = np.hypot(cx, cy)
+
+        if offset > max_offset:
+            scale = max_offset / offset
+            cx *= scale
+            cy *= scale
+
+        # Store the actual centreline used to generate the cloud
+        centreline_x.extend([cx] * points_per_section)
+        centreline_y.extend([cy] * points_per_section)
+        
+        phi = np.random.uniform(0, 2 * np.pi, points_per_section)
+        rho = np.sqrt(np.random.rand(points_per_section)) * r
+
+        xy = np.vstack((rho * np.cos(phi), rho * np.sin(phi)))
+
+        xy = R @ xy
+
+        x = xy[0] + cx
+        y = xy[1] + cy
+
+        section = np.column_stack((x, y, np.full(points_per_section, zi)))
+
+        cloud.append(section)
+
+    bubble = np.vstack(cloud)
+
+    bubble[:, 2] += centre_z
+    
+    centreline_x = np.asarray(centreline_x)
+    centreline_y = np.asarray(centreline_y)
+
+    result = calculate_bubble_eccentricity(
+        bubble,
+        diameter_mm,
+        window_length_mm
+    )
+
+    # ----- theoretical values computed over the same region -----
+
+    tip_percentile = 99.0
+
+    z_coords = bubble[:, 2]
+
+    z_front = np.percentile(z_coords, tip_percentile)
+    z_back = np.percentile(z_coords, 100.0 - tip_percentile)
+
+    front_mask = z_coords >= z_front
+    back_mask = z_coords <= z_back
+
+    fx = np.median(centreline_x[front_mask])
+    fy = np.median(centreline_y[front_mask])
+
+    bx = np.median(centreline_x[back_mask])
+    by = np.median(centreline_y[back_mask])
+
+    expected_front = (2.0 / diameter_mm) * np.sqrt(fx**2 + fy**2)
+    expected_back = (2.0 / diameter_mm) * np.sqrt(bx**2 + by**2)
+
+    return {
+    "bubble": bubble,
+    "expected_front": expected_front,
+    "expected_back": expected_back,
+    "measured_front": result["front_eccentricity, -"],
+    "measured_back": result["back_eccentricity, -"],
+    "result": result
+    }
+    
+def test_curved_bubbles(
+    n_bubbles: int = 100,
+    diameter_mm: float = 20.0,
+    window_length_mm: float = 100.0,
+    random_seed: int = 42
+) -> dict:
+
+    np.random.seed(random_seed)
+
+    expected_front = []
+    expected_back = []
+
+    measured_front = []
+    measured_back = []
+
+    for _ in range(n_bubbles):
+
+        bubble = generate_curved_bubble(
+            diameter_mm=diameter_mm,
+            window_length_mm=window_length_mm,
+
+            length_z=np.random.uniform(20.0, 60.0),
+            radius_mm=np.random.uniform(1.0, 4.0),
+
+            tip_shift=(np.random.uniform(-5.0, 5.0), np.random.uniform(-5.0, 5.0)),
+            tail_shift=(np.random.uniform(-5.0, 5.0), np.random.uniform(-5.0, 5.0)),
+
+            curvature_x=np.random.uniform(-5.0, 5.0),
+            curvature_y=np.random.uniform(-5.0, 5.0),
+
+            radius_variation=np.random.uniform(0.0, 0.40),
+
+            rotation_deg=np.random.uniform(0.0, 180.0),
+
+            n_sections=500,
+            points_per_section=40
+        )
+
+        expected_front.append(bubble["expected_front"])
+        expected_back.append(bubble["expected_back"])
+
+        measured_front.append(bubble["measured_front"])
+        measured_back.append(bubble["measured_back"])
+
+    return {
+        "expected_front": np.asarray(expected_front),
+        "expected_back": np.asarray(expected_back),
+        "measured_front": np.asarray(measured_front),
+        "measured_back": np.asarray(measured_back)
+    }
+    
+def plot_curved_validation(results: dict):
+
+    plt.figure(figsize=(6,6))
+
+    ax = plt.gca()
+
+    ax.plot(
+        [0,1],
+        [0,1],
+        "k--",
+        linewidth=1.2,
+        label="Ideal"
+    )
+
+    ax.scatter(
+        results["expected_front"],
+        results["measured_front"],
+        s=35,
+        alpha=0.7,
+        label="Front"
+    )
+
+    ax.scatter(
+        results["expected_back"],
+        results["measured_back"],
+        s=35,
+        alpha=0.7,
+        label="Back"
+    )
+
+    ax.set_xlim(0,1)
+    ax.set_ylim(0,1)
+
+    ax.set_aspect("equal")
+
+    ax.xaxis.set_major_locator(MultipleLocator(0.1))
+    ax.yaxis.set_major_locator(MultipleLocator(0.1))
+
+    ax.xaxis.set_minor_locator(MultipleLocator(0.05))
+    ax.yaxis.set_minor_locator(MultipleLocator(0.05))
+
+    ax.grid(True, which="major")
+    ax.grid(True, which="minor", alpha=0.3)
+
+    ax.tick_params(direction="in", top=True, right=True)
+
+    ax.set_xlabel("Reference eccentricity, -")
+    ax.set_ylabel("Measured eccentricity, -")
+
+    ax.legend(frameon=False)
+
+    plt.tight_layout()
+    plt.show()
+    
 if __name__ == "__main__":
     
+    print("\n================ Evaluation ==================")
+
     DIAMETER_MM = 20.0
     WINDOW_LENGTH = 100.0
     RADIUS_X = 2
@@ -360,24 +592,17 @@ if __name__ == "__main__":
     noise = test_noise_robustness(radius_x=RADIUS_X, radius_y=RADIUS_Y, length_z=LENGTH_Z, diameter_mm=DIAMETER_MM, window_length_mm=WINDOW_LENGTH)   
      
     plot_noise(noise)
-
+    
     front_rmse = np.sqrt(np.mean((accuracy["front"] - accuracy["expected"])**2))
     back_rmse = np.sqrt(np.mean((accuracy["back"] - accuracy["expected"])**2))
 
-    print(f"Front RMSE: {front_rmse:.5f}")
-    print(f"Back RMSE:  {back_rmse:.5f}")
+    
 
     front_bias = np.mean(accuracy["front"] - accuracy["expected"])
     back_bias = np.mean(accuracy["back"] - accuracy["expected"])
     
-    print(f"Front bias: {front_bias:.5f}")
-    print(f"Back bias:  {back_bias:.5f}")
-    
     front_mae = np.mean(np.abs(accuracy["front"] - accuracy["expected"]))
     back_mae = np.mean(np.abs(accuracy["back"] - accuracy["expected"]))
-    
-    print(f"Front MAE: {front_mae:.5f}")
-    print(f"Back MAE:  {back_mae:.5f}")
     
     ss_res_front = np.sum((accuracy["front"] - accuracy["expected"])**2)
     ss_tot = np.sum((accuracy["expected"] - np.mean(accuracy["expected"]))**2)
@@ -386,11 +611,53 @@ if __name__ == "__main__":
     ss_res_back = np.sum((accuracy["back"] - accuracy["expected"])**2)
     r2_back = 1.0 - ss_res_back / ss_tot
 
-    print(f"Front R²: {r2_front:.5f}")
-    print(f"Back  R²: {r2_back:.5f}")
-    
     front_error = np.abs(accuracy["front"] - accuracy["expected"])
     back_error = np.abs(accuracy["back"] - accuracy["expected"])
-
+    
+    print("\n========== Nominal Bubble Applicability ==========")
+    print(f"Front RMSE: {front_rmse:.5f}")
+    print(f"Back RMSE:  {back_rmse:.5f}")
+    print(f"Front bias: {front_bias:.5f}")
+    print(f"Back bias:  {back_bias:.5f}")
+    print(f"Front MAE: {front_mae:.5f}")
+    print(f"Back MAE:  {back_mae:.5f}")
+    print(f"Front R²: {r2_front:.5f}")
+    print(f"Back  R²: {r2_back:.5f}")
     print(f"Front 95th percentile error: {np.percentile(front_error,95):.5f}")
     print(f"Back 95th percentile error:  {np.percentile(back_error,95):.5f}")
+    print("================================================")
+    
+    curved = test_curved_bubbles(n_bubbles=100)
+
+    plot_curved_validation(curved)
+
+    front_rmse = np.sqrt(np.mean((curved["measured_front"] - curved["expected_front"])**2))
+    back_rmse = np.sqrt(np.mean((curved["measured_back"] - curved["expected_back"])**2))
+
+    front_mae = np.mean(np.abs(curved["measured_front"] - curved["expected_front"]))
+    back_mae = np.mean(np.abs(curved["measured_back"] - curved["expected_back"]))
+
+    front_bias = np.mean(curved["measured_front"] - curved["expected_front"])
+    back_bias = np.mean(curved["measured_back"] - curved["expected_back"])
+
+    ss_tot_front = np.sum((curved["expected_front"] - np.mean(curved["expected_front"]))**2)
+    ss_tot_back = np.sum((curved["expected_back"] - np.mean(curved["expected_back"]))**2)
+
+    front_r2 = 1 - np.sum((curved["measured_front"] - curved["expected_front"])**2) / ss_tot_front
+    back_r2 = 1 - np.sum((curved["measured_back"] - curved["expected_back"])**2) / ss_tot_back
+    
+    front_error = np.abs(curved["measured_front"] - curved["expected_front"])
+    back_error = np.abs(curved["measured_back"] - curved["expected_back"])
+    
+    print("\n========== Curved Bubble Applicability ==========")
+    print(f"Front RMSE : {front_rmse:.5f}")
+    print(f"Back RMSE  : {back_rmse:.5f}")
+    print(f"Front MAE  : {front_mae:.5f}")
+    print(f"Back MAE   : {back_mae:.5f}")
+    print(f"Front bias : {front_bias:.5f}")
+    print(f"Back bias  : {back_bias:.5f}")
+    print(f"Front R²   : {front_r2:.5f}")
+    print(f"Back R²    : {back_r2:.5f}")
+    print(f"Front 95th percentile error: {np.percentile(front_error,95):.5f}")
+    print(f"Back 95th percentile error: {np.percentile(back_error,95):.5f}")
+    print("================================================")
