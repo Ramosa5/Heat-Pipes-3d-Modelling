@@ -46,6 +46,7 @@ COCO_FILE = "_annotations.coco.json"
 
 RUN_SYNTHETIC_ANALYSIS = True
 RUN_REAL_ANALYSIS = True
+RUN_PARAMETER_SENSITIVITY = True
 
 # Real dataset range
 START_FRAME = 100
@@ -53,6 +54,7 @@ N_FRAMES = 40
 
 # Synthetic validation
 N_REALISATIONS = 100
+
 ASYMMETRY_MIN = 0.0
 ASYMMETRY_MAX = 0.70
 ASYMMETRY_STEP = 0.01
@@ -65,6 +67,15 @@ NOISE_STEP_MM = 0.05
 N_SECTIONS = 50
 MIN_POINTS_PER_SECTION = 5
 RADIUS_STATISTIC = "median"
+
+# Parameter sensitivity analysis
+SECTION_VALUES = [10, 20, 30, 40, 50, 75, 100, 150]
+MIN_POINTS_VALUES = [1, 3, 5, 10, 20, 50]
+RADIUS_STATISTICS_TO_COMPARE = ["median", "percentile"]
+
+SENSITIVITY_REALISATIONS = 100
+SENSITIVITY_ASYMMETRY = 0.20
+SENSITIVITY_NOISE_STD_MM = 0.25
 
 # Reconstruction parameters
 DIAMETER_MM = 20.0
@@ -92,7 +103,7 @@ KEEP_ASPECT = True
 # ============================================================
 def clear_output_directory():
     """
-    Removes old output files so outdated plots do not stay in the folder.
+    Removes old output files so outdated plots do not remain in the folder.
     """
     patterns = ["*.png", "*.csv", "*.json"]
 
@@ -106,7 +117,7 @@ def clear_output_directory():
 
 def to_python_value(value):
     """
-    Converts NumPy values to plain Python values for JSON export.
+    Converts NumPy and Path values to JSON-compatible Python values.
     """
     if isinstance(value, np.generic):
         return value.item()
@@ -132,7 +143,7 @@ def save_csv(rows, path):
         writer.writerows(rows)
 
 
-def save_summary_json(synthetic_rows, real_rows):
+def save_summary_json(synthetic_rows, real_rows, sensitivity_rows):
     """
     Saves a compact summary of the validation.
     """
@@ -147,6 +158,9 @@ def save_summary_json(synthetic_rows, real_rows):
             "coco_file": COCO_FILE,
             "start_frame": int(START_FRAME),
             "n_frames": int(N_FRAMES),
+            "run_synthetic_analysis": bool(RUN_SYNTHETIC_ANALYSIS),
+            "run_real_analysis": bool(RUN_REAL_ANALYSIS),
+            "run_parameter_sensitivity": bool(RUN_PARAMETER_SENSITIVITY),
             "n_realisations": int(N_REALISATIONS),
             "asymmetry_min": float(ASYMMETRY_MIN),
             "asymmetry_max": float(ASYMMETRY_MAX),
@@ -158,6 +172,12 @@ def save_summary_json(synthetic_rows, real_rows):
             "n_sections": int(N_SECTIONS),
             "min_points_per_section": int(MIN_POINTS_PER_SECTION),
             "radius_statistic": RADIUS_STATISTIC,
+            "section_values": SECTION_VALUES,
+            "min_points_values": MIN_POINTS_VALUES,
+            "radius_statistics_to_compare": RADIUS_STATISTICS_TO_COMPARE,
+            "sensitivity_realisations": int(SENSITIVITY_REALISATIONS),
+            "sensitivity_asymmetry": float(SENSITIVITY_ASYMMETRY),
+            "sensitivity_noise_std_mm": float(SENSITIVITY_NOISE_STD_MM),
         },
         "synthetic": {
             "n_rows": int(len(synthetic_rows)),
@@ -168,6 +188,9 @@ def save_summary_json(synthetic_rows, real_rows):
             "std_score": float(np.std(real_scores)) if real_scores else None,
             "min_score": float(np.min(real_scores)) if real_scores else None,
             "max_score": float(np.max(real_scores)) if real_scores else None,
+        },
+        "sensitivity": {
+            "n_rows": int(len(sensitivity_rows)),
         },
     }
 
@@ -254,7 +277,7 @@ def generate_synthetic_bubble_surface(
         points += rng.normal(
             loc=0.0,
             scale=noise_std_mm,
-            size=points.shape
+            size=points.shape,
         )
 
     rot_mat = rotation_matrix_xyz(*rotation_deg)
@@ -268,13 +291,32 @@ def generate_synthetic_bubble_surface(
 
 def calculate_rotational_fit_for_points(points):
     """
-    Calculates rotational fit score for a point cloud.
+    Calculates rotational fit score using the default parameters.
     """
     score, mean_error, ref_radius = rotational_fit_score(
         points,
         n_sections=N_SECTIONS,
         min_points_per_section=MIN_POINTS_PER_SECTION,
         radius_statistic=RADIUS_STATISTIC,
+    )
+
+    return score, mean_error, ref_radius
+
+
+def calculate_rotational_fit_for_points_custom(
+    points,
+    n_sections,
+    min_points_per_section,
+    radius_statistic,
+):
+    """
+    Calculates rotational fit score using custom algorithm parameters.
+    """
+    score, mean_error, ref_radius = rotational_fit_score(
+        points,
+        n_sections=n_sections,
+        min_points_per_section=min_points_per_section,
+        radius_statistic=radius_statistic,
     )
 
     return score, mean_error, ref_radius
@@ -295,13 +337,21 @@ def analyse_synthetic_bubbles():
     n_theta = 120
 
     asymmetry_values = np.round(
-        np.arange(ASYMMETRY_MIN, ASYMMETRY_MAX + 0.5 * ASYMMETRY_STEP, ASYMMETRY_STEP),
-        2
+        np.arange(
+            ASYMMETRY_MIN,
+            ASYMMETRY_MAX + 0.5 * ASYMMETRY_STEP,
+            ASYMMETRY_STEP,
+        ),
+        2,
     )
 
     noise_values = np.round(
-        np.arange(NOISE_MIN_MM, NOISE_MAX_MM + 0.5 * NOISE_STEP_MM, NOISE_STEP_MM),
-        2
+        np.arange(
+            NOISE_MIN_MM,
+            NOISE_MAX_MM + 0.5 * NOISE_STEP_MM,
+            NOISE_STEP_MM,
+        ),
+        2,
     )
 
     # ------------------------------------------------------------
@@ -433,6 +483,136 @@ def analyse_synthetic_bubbles():
             "mean_error_mm": mean_error,
             "R_mm": ref_radius,
         })
+
+    return rows
+
+
+def analyse_parameter_sensitivity():
+    """
+    Evaluates the influence of rotational-fit algorithm parameters.
+
+    The tested parameters are:
+    1. Number of axial sections.
+    2. Minimum number of points per section.
+    3. Radius statistic used to define the reference radius profile.
+    """
+    rows = []
+
+    length_mm = 30.0
+    radius_mm = 7.0
+    n_z = 80
+    n_theta = 120
+
+    # ------------------------------------------------------------
+    # 1. Influence of N_SECTIONS
+    # ------------------------------------------------------------
+    for n_sections in SECTION_VALUES:
+        for realisation in range(SENSITIVITY_REALISATIONS):
+            points = generate_synthetic_bubble_surface(
+                length_mm=length_mm,
+                radius_mm=radius_mm,
+                asymmetry=SENSITIVITY_ASYMMETRY,
+                noise_std_mm=SENSITIVITY_NOISE_STD_MM,
+                n_z=n_z,
+                n_theta=n_theta,
+                seed=200000 + n_sections * 1000 + realisation,
+            )
+
+            score, mean_error, ref_radius = calculate_rotational_fit_for_points_custom(
+                points=points,
+                n_sections=n_sections,
+                min_points_per_section=MIN_POINTS_PER_SECTION,
+                radius_statistic=RADIUS_STATISTIC,
+            )
+
+            rows.append({
+                "source": "synthetic",
+                "test_type": "parameter_sensitivity",
+                "study": "n_sections",
+                "realisation": int(realisation),
+                "n_sections": int(n_sections),
+                "min_points_per_section": int(MIN_POINTS_PER_SECTION),
+                "radius_statistic": RADIUS_STATISTIC,
+                "asymmetry": float(SENSITIVITY_ASYMMETRY),
+                "noise_std_mm": float(SENSITIVITY_NOISE_STD_MM),
+                "score": score,
+                "mean_error_mm": mean_error,
+                "R_mm": ref_radius,
+            })
+
+    # ------------------------------------------------------------
+    # 2. Influence of MIN_POINTS_PER_SECTION
+    # ------------------------------------------------------------
+    for min_points in MIN_POINTS_VALUES:
+        for realisation in range(SENSITIVITY_REALISATIONS):
+            points = generate_synthetic_bubble_surface(
+                length_mm=length_mm,
+                radius_mm=radius_mm,
+                asymmetry=SENSITIVITY_ASYMMETRY,
+                noise_std_mm=SENSITIVITY_NOISE_STD_MM,
+                n_z=n_z,
+                n_theta=n_theta,
+                seed=300000 + min_points * 1000 + realisation,
+            )
+
+            score, mean_error, ref_radius = calculate_rotational_fit_for_points_custom(
+                points=points,
+                n_sections=N_SECTIONS,
+                min_points_per_section=min_points,
+                radius_statistic=RADIUS_STATISTIC,
+            )
+
+            rows.append({
+                "source": "synthetic",
+                "test_type": "parameter_sensitivity",
+                "study": "min_points_per_section",
+                "realisation": int(realisation),
+                "n_sections": int(N_SECTIONS),
+                "min_points_per_section": int(min_points),
+                "radius_statistic": RADIUS_STATISTIC,
+                "asymmetry": float(SENSITIVITY_ASYMMETRY),
+                "noise_std_mm": float(SENSITIVITY_NOISE_STD_MM),
+                "score": score,
+                "mean_error_mm": mean_error,
+                "R_mm": ref_radius,
+            })
+
+    # ------------------------------------------------------------
+    # 3. Influence of RADIUS_STATISTIC
+    # ------------------------------------------------------------
+    for radius_statistic in RADIUS_STATISTICS_TO_COMPARE:
+        for realisation in range(SENSITIVITY_REALISATIONS):
+            points = generate_synthetic_bubble_surface(
+                length_mm=length_mm,
+                radius_mm=radius_mm,
+                asymmetry=SENSITIVITY_ASYMMETRY,
+                noise_std_mm=SENSITIVITY_NOISE_STD_MM,
+                n_z=n_z,
+                n_theta=n_theta,
+                seed=400000 + realisation,
+            )
+
+            score, mean_error, ref_radius = calculate_rotational_fit_for_points_custom(
+                points=points,
+                n_sections=N_SECTIONS,
+                min_points_per_section=MIN_POINTS_PER_SECTION,
+                radius_statistic=radius_statistic,
+            )
+
+            rows.append({
+                "source": "synthetic",
+                "test_type": "parameter_sensitivity",
+                "study": "radius_statistic",
+                "realisation": int(realisation),
+                "n_sections": int(N_SECTIONS),
+                "min_points_per_section": int(MIN_POINTS_PER_SECTION),
+                "radius_statistic": radius_statistic,
+                "asymmetry": float(SENSITIVITY_ASYMMETRY),
+                "noise_std_mm": float(SENSITIVITY_NOISE_STD_MM),
+                "score": score,
+                "mean_error_mm": mean_error,
+                "R_mm": ref_radius,
+            })
 
     return rows
 
@@ -609,7 +789,7 @@ def analyse_real_dataset(dataset_dir, coco_file, start_frame, n_frames):
                     min_radius_vox=MIN_RADIUS_VOX,
                     min_area_cc=MIN_AREA_CC,
                     iou_thr=IOU_THR,
-                )
+                ),
             ),
             (
                 "tube34",
@@ -622,7 +802,7 @@ def analyse_real_dataset(dataset_dir, coco_file, start_frame, n_frames):
                     min_radius_vox=MIN_RADIUS_VOX,
                     min_area_cc=MIN_AREA_CC,
                     iou_thr=IOU_THR,
-                )
+                ),
             ),
         ]
 
@@ -702,6 +882,20 @@ def apply_paper_plot_style(
         ax.set_aspect("equal", adjustable="box")
 
 
+def make_safe_ylim(values, padding=0.02):
+    """
+    Creates safe y limits even when all values are almost identical.
+    """
+    v_min = float(np.min(values))
+    v_max = float(np.max(values))
+
+    if abs(v_max - v_min) < 1e-9:
+        return v_min - padding, v_max + padding
+
+    margin = max(padding, 0.1 * (v_max - v_min))
+    return v_min - margin, v_max + margin
+
+
 def plot_synthetic_score_vs_asymmetry(synthetic_rows):
     rows = [
         row for row in synthetic_rows
@@ -735,42 +929,6 @@ def plot_synthetic_score_vs_asymmetry(synthetic_rows):
 
     fig.tight_layout()
     fig.savefig(OUTPUT_DIR / "synthetic_score_vs_asymmetry.png", dpi=300)
-    plt.close(fig)
-
-
-def plot_synthetic_error_vs_asymmetry(synthetic_rows):
-    rows = [
-        row for row in synthetic_rows
-        if row["test_type"] == "asymmetry_sweep"
-    ]
-
-    if not rows:
-        return
-
-    x = [row["asymmetry"] for row in rows]
-    y = [row["mean_error_mm"] for row in rows]
-
-    fig, ax = plt.subplots(figsize=(6, 6))
-
-    ax.scatter(
-        x,
-        y,
-        s=18,
-        label="Mean radial error",
-    )
-
-    apply_paper_plot_style(
-        ax,
-        xlim=(0.0, 0.75),
-        ylim=(0.0, max(y) * 1.1),
-        xlabel="Asymmetry coefficient, -",
-        ylabel="Mean radial error, mm",
-    )
-
-    ax.legend(loc="upper left", frameon=True)
-
-    fig.tight_layout()
-    fig.savefig(OUTPUT_DIR / "synthetic_error_vs_asymmetry.png", dpi=300)
     plt.close(fig)
 
 
@@ -821,6 +979,80 @@ def plot_synthetic_score_vs_noise(synthetic_rows):
     plt.close(fig)
 
 
+def save_real_score_bin_report(real_rows, bins):
+    """
+    Saves two CSV files:
+    1. Histogram bin summary.
+    2. Assignment of every real bubble to a histogram bin.
+    """
+    rows_with_scores = [
+        row for row in real_rows
+        if row.get("score") is not None
+    ]
+
+    if not rows_with_scores:
+        return
+
+    summary_rows = []
+    assignment_rows = []
+
+    for bin_index in range(len(bins) - 1):
+        bin_left = float(bins[bin_index])
+        bin_right = float(bins[bin_index + 1])
+
+        if bin_index == len(bins) - 2:
+            matching_rows = [
+                row for row in rows_with_scores
+                if bin_left <= row["score"] <= bin_right
+            ]
+        else:
+            matching_rows = [
+                row for row in rows_with_scores
+                if bin_left <= row["score"] < bin_right
+            ]
+
+        summary_rows.append({
+            "bin_index": bin_index,
+            "score_from": bin_left,
+            "score_to": bin_right,
+            "count": len(matching_rows),
+        })
+
+        for row in matching_rows:
+            assignment_rows.append({
+                "bin_index": bin_index,
+                "score_from": bin_left,
+                "score_to": bin_right,
+                "frame_number": row.get("frame_number"),
+                "image_file": row.get("image_file"),
+                "tube_pair": row.get("tube_pair"),
+                "bubble_index": row.get("bubble_index"),
+                "score": row.get("score"),
+                "mean_error_mm": row.get("mean_error_mm"),
+                "R_mm": row.get("R_mm"),
+                "pair_iou": row.get("pair_iou"),
+                "filled_voxels": row.get("filled_voxels"),
+                "surface_points": row.get("surface_points"),
+            })
+
+    save_csv(summary_rows, OUTPUT_DIR / "real_score_histogram_bins.csv")
+    save_csv(assignment_rows, OUTPUT_DIR / "real_score_bin_assignments.csv")
+
+    largest_bin = max(summary_rows, key=lambda row: row["count"])
+
+    print("\n=== Largest real-score histogram bin ===")
+    print(
+        f"bin {largest_bin['bin_index']} | "
+        f"score range = {largest_bin['score_from']:.4f} - {largest_bin['score_to']:.4f} | "
+        f"count = {largest_bin['count']}"
+    )
+
+    print(
+        "Detailed bubble assignments saved to: "
+        f"{OUTPUT_DIR / 'real_score_bin_assignments.csv'}"
+    )
+
+
 def plot_real_score_distribution(real_rows):
     scores = [
         row["score"] for row in real_rows
@@ -830,11 +1062,15 @@ def plot_real_score_distribution(real_rows):
     if not scores:
         return
 
+    bins = np.linspace(0.5, 1.0, 16)
+
+    save_real_score_bin_report(real_rows, bins)
+
     fig, ax = plt.subplots(figsize=(6, 6))
 
     ax.hist(
         scores,
-        bins=15,
+        bins=bins,
         edgecolor="black",
         linewidth=0.7,
     )
@@ -852,14 +1088,173 @@ def plot_real_score_distribution(real_rows):
     plt.close(fig)
 
 
+def plot_sensitivity_n_sections(sensitivity_rows):
+    rows = [
+        row for row in sensitivity_rows
+        if row.get("study") == "n_sections"
+        and row.get("score") is not None
+    ]
+
+    if not rows:
+        return
+
+    values = sorted(set(row["n_sections"] for row in rows))
+
+    mean_scores = []
+    std_scores = []
+
+    for value in values:
+        scores = np.array([
+            row["score"] for row in rows
+            if row["n_sections"] == value
+        ], dtype=float)
+
+        mean_scores.append(float(np.mean(scores)))
+        std_scores.append(float(np.std(scores)))
+
+    y_min, y_max = make_safe_ylim(mean_scores, padding=0.01)
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    ax.errorbar(
+        values,
+        mean_scores,
+        yerr=std_scores,
+        fmt="o",
+        linestyle="none",
+        markersize=5,
+        capsize=3,
+        label="Mean ± std",
+    )
+
+    apply_paper_plot_style(
+        ax,
+        xlim=(0, max(values) + 10),
+        ylim=(y_min, y_max),
+        xlabel="Number of axial sections, -",
+        ylabel="Rotational fit score, -",
+    )
+
+    ax.legend(loc="best", frameon=True)
+
+    fig.tight_layout()
+    fig.savefig(OUTPUT_DIR / "sensitivity_n_sections.png", dpi=300)
+    plt.close(fig)
+
+
+def plot_sensitivity_min_points(sensitivity_rows):
+    rows = [
+        row for row in sensitivity_rows
+        if row.get("study") == "min_points_per_section"
+        and row.get("score") is not None
+    ]
+
+    if not rows:
+        return
+
+    values = sorted(set(row["min_points_per_section"] for row in rows))
+
+    mean_scores = []
+    std_scores = []
+
+    for value in values:
+        scores = np.array([
+            row["score"] for row in rows
+            if row["min_points_per_section"] == value
+        ], dtype=float)
+
+        mean_scores.append(float(np.mean(scores)))
+        std_scores.append(float(np.std(scores)))
+
+    y_min, y_max = make_safe_ylim(mean_scores, padding=0.01)
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    ax.errorbar(
+        values,
+        mean_scores,
+        yerr=std_scores,
+        fmt="o",
+        linestyle="none",
+        markersize=5,
+        capsize=3,
+        label="Mean ± std",
+    )
+
+    apply_paper_plot_style(
+        ax,
+        xlim=(0, max(values) + 5),
+        ylim=(y_min, y_max),
+        xlabel="Minimum points per section, -",
+        ylabel="Rotational fit score, -",
+    )
+
+    ax.legend(loc="best", frameon=True)
+
+    fig.tight_layout()
+    fig.savefig(OUTPUT_DIR / "sensitivity_min_points_per_section.png", dpi=300)
+    plt.close(fig)
+
+
+def plot_sensitivity_radius_statistic(sensitivity_rows):
+    rows = [
+        row for row in sensitivity_rows
+        if row.get("study") == "radius_statistic"
+        and row.get("score") is not None
+    ]
+
+    if not rows:
+        return
+
+    statistic_names = sorted(set(row["radius_statistic"] for row in rows))
+
+    data = []
+
+    for statistic_name in statistic_names:
+        scores = [
+            row["score"] for row in rows
+            if row["radius_statistic"] == statistic_name
+        ]
+
+        data.append(scores)
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    ax.boxplot(
+        data,
+        labels=statistic_names,
+        showmeans=True,
+    )
+
+    apply_paper_plot_style(
+        ax,
+        xlim=None,
+        ylim=None,
+        xlabel="Radius statistic, -",
+        ylabel="Rotational fit score, -",
+    )
+
+    fig.tight_layout()
+    fig.savefig(OUTPUT_DIR / "sensitivity_radius_statistic.png", dpi=300)
+    plt.close(fig)
+
+
 def create_plots(synthetic_rows, real_rows):
     if synthetic_rows:
         plot_synthetic_score_vs_asymmetry(synthetic_rows)
-        plot_synthetic_error_vs_asymmetry(synthetic_rows)
         plot_synthetic_score_vs_noise(synthetic_rows)
 
     if real_rows:
         plot_real_score_distribution(real_rows)
+
+
+def create_sensitivity_plots(sensitivity_rows):
+    if not sensitivity_rows:
+        return
+
+    plot_sensitivity_n_sections(sensitivity_rows)
+    plot_sensitivity_min_points(sensitivity_rows)
+    plot_sensitivity_radius_statistic(sensitivity_rows)
 
 
 # ============================================================
@@ -938,6 +1333,47 @@ def print_synthetic_summary(synthetic_rows):
         )
 
 
+def print_sensitivity_summary(sensitivity_rows):
+    print("\n=== Parameter sensitivity ===")
+
+    if not sensitivity_rows:
+        print("No parameter sensitivity results.")
+        return
+
+    for study_name in ["n_sections", "min_points_per_section", "radius_statistic"]:
+        rows = [
+            row for row in sensitivity_rows
+            if row.get("study") == study_name
+        ]
+
+        if not rows:
+            continue
+
+        print(f"\nStudy: {study_name}")
+
+        if study_name == "n_sections":
+            values = sorted(set(row["n_sections"] for row in rows))
+            key = "n_sections"
+        elif study_name == "min_points_per_section":
+            values = sorted(set(row["min_points_per_section"] for row in rows))
+            key = "min_points_per_section"
+        else:
+            values = sorted(set(row["radius_statistic"] for row in rows))
+            key = "radius_statistic"
+
+        for value in values:
+            scores = np.array([
+                row["score"] for row in rows
+                if row[key] == value
+            ], dtype=float)
+
+            print(
+                f"{key}={value} | "
+                f"score mean={np.mean(scores):.4f} | "
+                f"score std={np.std(scores):.4f}"
+            )
+
+
 def print_real_summary(real_rows):
     print("\n=== Real bubbles ===")
 
@@ -973,6 +1409,7 @@ def run_analysis():
 
     synthetic_rows = []
     real_rows = []
+    sensitivity_rows = []
 
     if RUN_SYNTHETIC_ANALYSIS:
         synthetic_rows = analyse_synthetic_bubbles()
@@ -984,6 +1421,9 @@ def run_analysis():
             start_frame=START_FRAME,
             n_frames=N_FRAMES,
         )
+
+    if RUN_PARAMETER_SENSITIVITY:
+        sensitivity_rows = analyse_parameter_sensitivity()
 
     if synthetic_rows:
         save_csv(
@@ -997,17 +1437,28 @@ def run_analysis():
             OUTPUT_DIR / "real_rotational_fit_results.csv",
         )
 
+    if sensitivity_rows:
+        save_csv(
+            sensitivity_rows,
+            OUTPUT_DIR / "parameter_sensitivity_results.csv",
+        )
+
     if synthetic_rows or real_rows:
         save_csv(
             synthetic_rows + real_rows,
             OUTPUT_DIR / "all_rotational_fit_results.csv",
         )
 
-    save_summary_json(synthetic_rows, real_rows)
+    save_summary_json(synthetic_rows, real_rows, sensitivity_rows)
+
     create_plots(synthetic_rows, real_rows)
+    create_sensitivity_plots(sensitivity_rows)
 
     if synthetic_rows:
         print_synthetic_summary(synthetic_rows)
+
+    if sensitivity_rows:
+        print_sensitivity_summary(sensitivity_rows)
 
     if real_rows:
         print_real_summary(real_rows)
