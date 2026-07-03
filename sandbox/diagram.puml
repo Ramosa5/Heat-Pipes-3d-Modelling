@@ -1,0 +1,27 @@
+@startuml
+
+start
+
+:Acquire experimental images;
+
+:Image preprocessing;
+
+:Bubble segmentation;
+
+:3D reconstruction;
+
+fork
+
+:Bubble eccentricity;
+
+fork again
+
+:Rotational-body fit coefficient;
+
+end fork
+
+:Generate quantitative results;
+
+stop
+
+@enduml
