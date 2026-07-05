@@ -8,18 +8,25 @@ import cv2
 from .coco_utils import build_bubble_mask_from_anns, load_coco
 from .config import ReconstructionConfig
 from .export_io import safe_stem, save_mask, save_point_cloud_from_volume
+from .frame_annotation import save_parameter_overlay_frame
 from .fit_score import rotational_fit_score
 from .bubble_physics import summarize_rectified_mask_parameters
 from .eccentricity import eccentricity_records_for_points
 from .parameter_export import (
     ECCENTRICITY_FIELDS,
     MASK_PARAMETER_FIELDS,
+    TRACKING_FIELDS,
     append_dict_rows,
 )
 from .pipe import build_pipe_cylinder_mesh_from_rectified_shape
-from .reconstruction import reconstruct_pair_no_stick
+from .reconstruction import reconstruct_pair_no_stick_with_bubbles
 from .rectification import rectify_and_align_pair
 from .tube_geometry import point_in_tube
+from .tracking import (
+    BubbleTracker,
+    detections_from_reconstructed_bubbles,
+    tracking_label_records,
+)
 from .volume import volume_to_points_mm, volume_to_surface_points_mm
 
 
@@ -77,7 +84,7 @@ def reconstruct_and_score_pair(rect_top,
                                config: ReconstructionConfig,
                                label: str):
     """Run per-bubble reconstruction and rotational fit score for one TOP/SIDE pair."""
-    volume, voxel_mm, n_pairs = reconstruct_pair_no_stick(
+    volume, voxel_mm, bubbles = reconstruct_pair_no_stick_with_bubbles(
         rect_top,
         rect_side,
         diameter_mm=config.diameter_mm,
@@ -96,7 +103,7 @@ def reconstruct_and_score_pair(rect_top,
     )
     print_rotational_fit(label, score, mean_error, radius)
 
-    return volume, voxel_mm, n_pairs, score, mean_error, radius
+    return volume, voxel_mm, len(bubbles), bubbles, score, mean_error, radius
 
 
 
@@ -113,10 +120,10 @@ def calculate_and_save_frame_parameters(file_name: str,
                                         vol_34,
                                         voxel_mm_34: float,
                                         n_pairs_34: int,
-                                        config: ReconstructionConfig) -> None:
+                                        config: ReconstructionConfig) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     """Calculate eccentricity and mask-derived parameters for one processed frame."""
     if not config.eccentricity:
-        return
+        return [], []
 
     eccentricity_rows: list[dict[str, object]] = []
 
@@ -209,13 +216,116 @@ def calculate_and_save_frame_parameters(file_name: str,
         MASK_PARAMETER_FIELDS,
     )
 
+    return eccentricity_rows, mask_parameter_rows
+
+def build_preview_parameter_labels(tracking_rows: list[dict[str, object]],
+                                   eccentricity_rows: list[dict[str, object]],
+                                   tube_pair: str) -> list[dict[str, object]]:
+    """Build multi-line per-bubble labels for the 3D PyVista preview."""
+    track_rows = [row for row in tracking_rows if str(row.get("tube_pair", "")) == tube_pair]
+    ecc_rows = [row for row in eccentricity_rows if str(row.get("tube_pair", "")) == tube_pair]
+
+    if not track_rows:
+        return []
+
+    track_rows = sorted(
+        track_rows,
+        key=lambda row: (float(row.get("centroid_z_mm", 0.0)), float(row.get("centroid_x_mm", 0.0)), float(row.get("centroid_y_mm", 0.0))),
+    )
+    ecc_rows = sorted(ecc_rows, key=lambda row: int(row.get("bubble_index", 0)))
+
+    labels: list[dict[str, object]] = []
+    for i, track_row in enumerate(track_rows):
+        ecc_row = ecc_rows[i] if i < len(ecc_rows) else None
+        lines = [
+            f"ID {int(track_row['track_id'])}",
+            f"det {int(track_row['detection_index'])}",
+            f"z {float(track_row['centroid_z_mm']):.2f} mm",
+            f"V {int(track_row['volume_voxels'])} vox",
+        ]
+        if ecc_row is not None:
+            lines.extend([
+                f"e* {float(ecc_row['e_star']):.3f}",
+                f"e_x {float(ecc_row['e_x_mm']):.2f} mm",
+                f"e_y {float(ecc_row['e_y_mm']):.2f} mm",
+            ])
+
+        labels.append({
+            "position": (
+                float(track_row["centroid_x_mm"]),
+                float(track_row["centroid_y_mm"]),
+                float(track_row["centroid_z_mm"]),
+            ),
+            "label": "\n".join(lines),
+        })
+
+    return labels
+
+
+def update_tracking_for_frame(file_name: str,
+                              frame_no: int,
+                              bubbles_12: list[dict[str, Any]],
+                              bubbles_34: list[dict[str, Any]],
+                              tracker: BubbleTracker | None,
+                              config: ReconstructionConfig) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
+    """Assign persistent track IDs to reconstructed bubbles from this frame."""
+    if not config.tracking or tracker is None:
+        return [], [], []
+
+    tracking_rows: list[dict[str, object]] = []
+    label_rows_12: list[dict[str, object]] = []
+    label_rows_34: list[dict[str, object]] = []
+
+    for tube_pair, bubbles in (("tube12", bubbles_12), ("tube34", bubbles_34)):
+        detections = detections_from_reconstructed_bubbles(
+            bubbles=bubbles,
+            frame_no=frame_no,
+            file_name=file_name,
+            tube_pair=tube_pair,
+            center_radial_xy=config.center_radial_xy,
+        )
+        rows, closed_ids = tracker.update(
+            detections=detections,
+            frame_no=frame_no,
+            file_name=file_name,
+            tube_pair=tube_pair,
+        )
+        tracking_rows.extend(rows)
+
+        if tube_pair == "tube12":
+            label_rows_12 = tracking_label_records(rows)
+        else:
+            label_rows_34 = tracking_label_records(rows)
+
+        for row in rows:
+            print(
+                f"[TRACK] frame={row['frame_no']} {row['tube_pair']} "
+                f"track={row['track_id']} det={row['detection_index']} "
+                f"{row['match_status']} z={float(row['centroid_z_mm']):.2f} mm"
+            )
+        for closed_id in closed_ids:
+            print(f"[TRACK] frame={frame_no} {tube_pair} closed track={closed_id}")
+
+    if tracking_rows:
+        append_dict_rows(
+            os.path.join(config.parameters_dir, config.tracking_csv),
+            tracking_rows,
+            TRACKING_FIELDS,
+        )
+    else:
+        print(f"[TRACK] frame={frame_no}: no detections, no tracking rows saved")
+
+    return tracking_rows, label_rows_12, label_rows_34
+
+
 def process_frame(img_info: dict[str, Any],
                   annotations: list[dict[str, Any]],
                   bubble_cat_id: int,
                   global_frame_no: int,
                   local_frame_no: int,
                   total_selected: int,
-                  config: ReconstructionConfig) -> dict[str, Any] | None:
+                  config: ReconstructionConfig,
+                  tracker: BubbleTracker | None = None) -> dict[str, Any] | None:
     """Process one image frame and return data needed for preview/export."""
     img_id = img_info["id"]
     img_path = os.path.join(config.dataset_dir, img_info["file_name"])
@@ -274,21 +384,30 @@ def process_frame(img_info: dict[str, Any],
         save_mask(rect_top_34, config.masks_dir, file_stem, "tube34_top_rect")
         save_mask(rect_side_34, config.masks_dir, file_stem, "tube34_side_rect")
 
-    vol_12, voxel_mm_12, n_pairs_12, *_ = reconstruct_and_score_pair(
+    vol_12, voxel_mm_12, n_pairs_12, bubbles_12, *_ = reconstruct_and_score_pair(
         rect_top_12,
         rect_side_12,
         config,
         label="tube12",
     )
 
-    vol_34, voxel_mm_34, n_pairs_34, *_ = reconstruct_and_score_pair(
+    vol_34, voxel_mm_34, n_pairs_34, bubbles_34, *_ = reconstruct_and_score_pair(
         rect_top_34,
         rect_side_34,
         config,
         label="tube34",
     )
 
-    calculate_and_save_frame_parameters(
+    tracking_rows, track_labels_12, track_labels_34 = update_tracking_for_frame(
+        file_name=img_info["file_name"],
+        frame_no=global_frame_no,
+        bubbles_12=bubbles_12,
+        bubbles_34=bubbles_34,
+        tracker=tracker,
+        config=config,
+    )
+
+    eccentricity_rows, mask_parameter_rows = calculate_and_save_frame_parameters(
         file_name=img_info["file_name"],
         frame_no=global_frame_no,
         rect_top_12=rect_top_12,
@@ -303,6 +422,34 @@ def process_frame(img_info: dict[str, Any],
         n_pairs_34=n_pairs_34,
         config=config,
     )
+
+    parameter_labels_12 = build_preview_parameter_labels(tracking_rows, eccentricity_rows, "tube12") if config.preview_parameter_labels else []
+    parameter_labels_34 = build_preview_parameter_labels(tracking_rows, eccentricity_rows, "tube34") if config.preview_parameter_labels else []
+
+    if config.annotate_frame_parameters:
+        masks_by_tube = {
+            0: mask1_orig,
+            1: mask2_orig,
+            2: mask3_orig,
+            3: mask4_orig,
+        }
+        save_parameter_overlay_frame(
+            gray,
+            out_dir=config.annotated_frames_dir,
+            file_stem=file_stem,
+            tubes=config.tubes,
+            tube_anns=tube_anns,
+            masks_by_tube=masks_by_tube,
+            rect_shapes={
+                "tube12": rect_top_12.shape,
+                "tube34": rect_top_34.shape,
+            },
+            tracking_rows=tracking_rows,
+            eccentricity_rows=eccentricity_rows,
+            diameter_mm=config.diameter_mm,
+            frame_no=global_frame_no,
+            file_name=img_info["file_name"],
+        )
 
     pipe_mesh_12 = None
     pipe_mesh_34 = None
@@ -341,9 +488,13 @@ def process_frame(img_info: dict[str, Any],
         "vol_12": vol_12,
         "vox_12": voxel_mm_12,
         "pipe_mesh_12": pipe_mesh_12,
+        "track_labels_12": track_labels_12,
+        "parameter_labels_12": parameter_labels_12,
         "vol_34": vol_34,
         "vox_34": voxel_mm_34,
         "pipe_mesh_34": pipe_mesh_34,
+        "track_labels_34": track_labels_34,
+        "parameter_labels_34": parameter_labels_34,
     }
 
 
@@ -367,6 +518,11 @@ def run_pipeline(config: ReconstructionConfig) -> list[dict[str, Any]]:
         raise RuntimeError("Zakres start_frame/n_frames poza listą obrazów")
 
     frames_data: list[dict[str, Any]] = []
+    tracker = BubbleTracker(
+        max_distance_mm=config.tracking_max_distance_mm,
+        max_missing_frames=config.tracking_max_missing_frames,
+        debug=config.tracking_debug,
+    ) if config.tracking else None
 
     for local_i, img_info in enumerate(images_sel, start=0):
         global_i = start_idx + local_i + 1  # 1-based do logu
@@ -378,6 +534,7 @@ def run_pipeline(config: ReconstructionConfig) -> list[dict[str, Any]]:
             local_frame_no=local_i + 1,
             total_selected=len(images_sel),
             config=config,
+            tracker=tracker,
         )
         if frame_data is not None:
             frames_data.append(frame_data)
@@ -400,6 +557,8 @@ def run_pipeline(config: ReconstructionConfig) -> list[dict[str, Any]]:
             pipe_opacity=config.pipe_opacity,
             center_view_on_origin=config.center_view_on_origin,
             show_origin_marker=config.show_origin_marker,
+            show_tracking_labels=config.tracking_labels,
+            show_parameter_labels=config.preview_parameter_labels,
         )
 
     return frames_data

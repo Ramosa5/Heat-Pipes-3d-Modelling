@@ -49,6 +49,23 @@ class ReconstructionConfig:
     masks_dir: str = "masks"
     point_clouds_dir: str = "point_clouds"
 
+    # Optional 2D frame output with per-bubble parameters drawn on the original image.
+    # Enabled from CLI with --annotate-frame-parameters.
+    annotate_frame_parameters: bool = False
+    annotated_frames_dir: str = "annotated_frames"
+
+    # Optional frame-by-frame bubble tracking.
+    # Enabled from CLI with --tracking.
+    tracking: bool = False
+    tracking_csv: str = "tracking_parameters.csv"
+    tracking_max_distance_mm: float = 12.0
+    tracking_max_missing_frames: int = 0
+    tracking_debug: bool = False
+    tracking_labels: bool = False
+    # Optional rich per-bubble parameter labels directly in the 3D PyVista preview.
+    # Enabled from CLI with --preview-parameter-labels.
+    preview_parameter_labels: bool = False
+
     # Optional frame-by-frame eccentricity/parameter calculation.
     # Enabled from CLI with --eccentricity.
     eccentricity: bool = False

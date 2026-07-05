@@ -19,6 +19,26 @@ ECCENTRICITY_FIELDS = [
     "diameter_mm",
 ]
 
+TRACKING_FIELDS = [
+    "frame_no",
+    "file_name",
+    "tube_pair",
+    "track_id",
+    "detection_index",
+    "match_status",
+    "match_distance_mm",
+    "track_age_frames",
+    "missed_frames",
+    "centroid_x_mm",
+    "centroid_y_mm",
+    "centroid_z_mm",
+    "z_min_mm",
+    "z_max_mm",
+    "volume_voxels",
+    "point_count",
+]
+
+
 MASK_PARAMETER_FIELDS = [
     "frame_no",
     "file_name",

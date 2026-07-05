@@ -123,7 +123,9 @@ def pv_live_animate_keep_last(frames_data,
                               show_pipe: bool = True,
                               pipe_opacity: float = 0.5,
                               center_view_on_origin: bool = True,
-                              show_origin_marker: bool = True):
+                              show_origin_marker: bool = True,
+                              show_tracking_labels: bool = False,
+                              show_parameter_labels: bool = False):
     def safe_pts(vol, vox):
         pts = volume_to_points_mm(vol, vox, center_radial_xy=center_radial_xy, max_points=max_points)
         if pts is None:
@@ -135,6 +137,25 @@ def pv_live_animate_keep_last(frames_data,
         if mesh is None:
             return pv.PolyData()
         return mesh
+
+    def add_labels(plotter, fd, key, font_size: int = 14, text_color: str = "black", shape_opacity: float = 0.35):
+        label_records = fd.get(key, []) or []
+        if not label_records:
+            return None
+        try:
+            points = [item["position"] for item in label_records]
+            labels = [str(item["label"]) for item in label_records]
+            return plotter.add_point_labels(
+                points,
+                labels,
+                point_size=0,
+                font_size=int(font_size),
+                text_color=text_color,
+                shape_opacity=float(shape_opacity),
+                always_visible=True,
+            )
+        except Exception:
+            return None
 
     p = pv.Plotter(shape=(1, 2), window_size=(1500, 720), off_screen=False, title="Bubbles + Z-axis cylindrical pipe (live)")
 
@@ -161,6 +182,11 @@ def pv_live_animate_keep_last(frames_data,
         add_coordinate_origin_marker(p, radius_mm=0.06 * 20.0)
     p.add_axes()
     p.show_grid()
+    label_actor_a = None
+    if show_parameter_labels:
+        label_actor_a = add_labels(p, fd0, "parameter_labels_12", font_size=12, text_color="black", shape_opacity=0.45)
+    elif show_tracking_labels:
+        label_actor_a = add_labels(p, fd0, "track_labels_12", font_size=14, text_color="black", shape_opacity=0.35)
 
     p.subplot(0, 1)
     p.add_text("Bubble 3D + Z-axis pipe (tube3&4)", font_size=12)
@@ -172,6 +198,11 @@ def pv_live_animate_keep_last(frames_data,
         add_coordinate_origin_marker(p, radius_mm=0.06 * 20.0)
     p.add_axes()
     p.show_grid()
+    label_actor_b = None
+    if show_parameter_labels:
+        label_actor_b = add_labels(p, fd0, "parameter_labels_34", font_size=12, text_color="black", shape_opacity=0.45)
+    elif show_tracking_labels:
+        label_actor_b = add_labels(p, fd0, "track_labels_34", font_size=14, text_color="black", shape_opacity=0.35)
 
     p.link_views()
 
@@ -217,6 +248,29 @@ def pv_live_animate_keep_last(frames_data,
             p.title = fd["title"]
         except Exception:
             pass
+
+        if show_tracking_labels or show_parameter_labels:
+            try:
+                if label_actor_a is not None:
+                    p.remove_actor(label_actor_a)
+            except Exception:
+                pass
+            try:
+                if label_actor_b is not None:
+                    p.remove_actor(label_actor_b)
+            except Exception:
+                pass
+
+            p.subplot(0, 0)
+            if show_parameter_labels:
+                label_actor_a = add_labels(p, fd, "parameter_labels_12", font_size=12, text_color="black", shape_opacity=0.45)
+            else:
+                label_actor_a = add_labels(p, fd, "track_labels_12", font_size=14, text_color="black", shape_opacity=0.35)
+            p.subplot(0, 1)
+            if show_parameter_labels:
+                label_actor_b = add_labels(p, fd, "parameter_labels_34", font_size=12, text_color="black", shape_opacity=0.45)
+            else:
+                label_actor_b = add_labels(p, fd, "track_labels_34", font_size=14, text_color="black", shape_opacity=0.35)
 
         p.render()
         if hasattr(p, "process_events"):

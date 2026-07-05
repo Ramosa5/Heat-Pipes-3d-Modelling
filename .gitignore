@@ -2,3 +2,5 @@
 /point_clouds
 *.pyc
 *.csv
+*.jpg
+*.png
