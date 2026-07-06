@@ -138,21 +138,86 @@ def pv_live_animate_keep_last(frames_data,
             return pv.PolyData()
         return mesh
 
+    def _spread_overlapping_label_positions(points_xyz: np.ndarray,
+                                           near_distance_mm: float = 10.0,
+                                           base_offset_mm: float = 5.0) -> np.ndarray:
+        """Spread labels in 3D when several bubble centroids are close to each other.
+
+        PyVista can draw only one text box cleanly at one exact location, so when two
+        labels share nearly the same projected position one may visually cover the other.
+        This helper creates small deterministic offsets around each cluster of nearby
+        centroids so all labels remain visible at the same time.
+        """
+        pts = np.asarray(points_xyz, dtype=np.float64)
+        if pts.ndim != 2 or pts.shape[0] <= 1:
+            return pts
+
+        n = pts.shape[0]
+        parent = list(range(n))
+
+        def find(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        def union(i: int, j: int) -> None:
+            ri = find(i)
+            rj = find(j)
+            if ri != rj:
+                parent[rj] = ri
+
+        # Build simple proximity clusters.
+        for i in range(n):
+            for j in range(i + 1, n):
+                if float(np.linalg.norm(pts[i] - pts[j])) <= float(near_distance_mm):
+                    union(i, j)
+
+        clusters: dict[int, list[int]] = {}
+        for i in range(n):
+            clusters.setdefault(find(i), []).append(i)
+
+        out = pts.copy()
+        for _, idxs in clusters.items():
+            if len(idxs) <= 1:
+                continue
+
+            idxs = sorted(idxs, key=lambda idx: (pts[idx, 2], pts[idx, 0], pts[idx, 1]))
+            count = len(idxs)
+            radius = float(base_offset_mm) * max(1.0, 0.85 + 0.25 * (count - 1))
+            angles = np.linspace(0.0, 2.0 * np.pi, count, endpoint=False)
+
+            for rank, (idx, angle) in enumerate(zip(idxs, angles)):
+                out[idx, 0] += radius * np.cos(angle)
+                out[idx, 1] += radius * np.sin(angle)
+                out[idx, 2] += 1.5 * rank
+
+        return out
+
     def add_labels(plotter, fd, key, font_size: int = 14, text_color: str = "black", shape_opacity: float = 0.35):
         label_records = fd.get(key, []) or []
         if not label_records:
             return None
         try:
-            points = [item["position"] for item in label_records]
+            raw_points = np.asarray([item["position"] for item in label_records], dtype=np.float64)
+            points = _spread_overlapping_label_positions(
+                raw_points,
+                near_distance_mm=10.0 if "parameter" in str(key) else 6.0,
+                base_offset_mm=6.0 if "parameter" in str(key) else 3.0,
+            )
             labels = [str(item["label"]) for item in label_records]
+            n_labels = len(labels)
+            scaled_font_size = int(max(6, min(font_size, round(float(font_size) - 0.4 * max(0, n_labels - 1)))))
             return plotter.add_point_labels(
                 points,
                 labels,
                 point_size=0,
-                font_size=int(font_size),
+                font_size=scaled_font_size,
                 text_color=text_color,
                 shape_opacity=float(shape_opacity),
                 always_visible=True,
+                fill_shape=True,
+                margin=3,
             )
         except Exception:
             return None
