@@ -73,3 +73,44 @@ def append_dict_rows(path: str | os.PathLike[str], rows: Iterable[dict[str, obje
         writer.writerows(rows)
 
     print(f"[SAVE] Appended {len(rows)} parameter rows: {out_path}")
+
+
+ROTATIONAL_FIT_PARAMETER_FIELDS = [
+    "frame_no",
+    "file_name",
+    "tube_pair",
+    "bubble_index",
+    "detection_index",
+    "component_iou",
+    "filled_voxels",
+    "surface_points",
+    "rotational_fit_score",
+    "rotational_fit_mean_error_mm",
+    "rotational_fit_radius_mm",
+    "rotational_fit_n_sections",
+    "rotational_fit_min_points_per_section",
+    "rotational_fit_radius_statistic",
+]
+
+
+FRONT_BACK_ECCENTRICITY_FIELDS = [
+    "frame_no",
+    "file_name",
+    "tube_pair",
+    "bubble_index",
+    "detection_index",
+    "diameter_mm",
+    "window_length_mm",
+    "tip_percentile",
+    "edge_margin_mm",
+    "min_tip_points",
+    "front_eccentricity",
+    "back_eccentricity",
+    "front_shift_x_mm",
+    "front_shift_y_mm",
+    "back_shift_x_mm",
+    "back_shift_y_mm",
+    "front_clipped",
+    "back_clipped",
+    "point_count",
+]

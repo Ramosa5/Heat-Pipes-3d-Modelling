@@ -184,7 +184,7 @@ def pv_live_animate_keep_last(frames_data,
     p.show_grid()
     label_actor_a = None
     if show_parameter_labels:
-        label_actor_a = add_labels(p, fd0, "parameter_labels_12", font_size=12, text_color="black", shape_opacity=0.45)
+        label_actor_a = add_labels(p, fd0, "parameter_labels_12", font_size=10, text_color="black", shape_opacity=0.45)
     elif show_tracking_labels:
         label_actor_a = add_labels(p, fd0, "track_labels_12", font_size=14, text_color="black", shape_opacity=0.35)
 
@@ -200,7 +200,7 @@ def pv_live_animate_keep_last(frames_data,
     p.show_grid()
     label_actor_b = None
     if show_parameter_labels:
-        label_actor_b = add_labels(p, fd0, "parameter_labels_34", font_size=12, text_color="black", shape_opacity=0.45)
+        label_actor_b = add_labels(p, fd0, "parameter_labels_34", font_size=10, text_color="black", shape_opacity=0.45)
     elif show_tracking_labels:
         label_actor_b = add_labels(p, fd0, "track_labels_34", font_size=14, text_color="black", shape_opacity=0.35)
 
@@ -263,12 +263,12 @@ def pv_live_animate_keep_last(frames_data,
 
             p.subplot(0, 0)
             if show_parameter_labels:
-                label_actor_a = add_labels(p, fd, "parameter_labels_12", font_size=12, text_color="black", shape_opacity=0.45)
+                label_actor_a = add_labels(p, fd, "parameter_labels_12", font_size=10, text_color="black", shape_opacity=0.45)
             else:
                 label_actor_a = add_labels(p, fd, "track_labels_12", font_size=14, text_color="black", shape_opacity=0.35)
             p.subplot(0, 1)
             if show_parameter_labels:
-                label_actor_b = add_labels(p, fd, "parameter_labels_34", font_size=12, text_color="black", shape_opacity=0.45)
+                label_actor_b = add_labels(p, fd, "parameter_labels_34", font_size=10, text_color="black", shape_opacity=0.45)
             else:
                 label_actor_b = add_labels(p, fd, "track_labels_34", font_size=14, text_color="black", shape_opacity=0.35)
 

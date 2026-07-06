@@ -105,6 +105,31 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--rotational-fit-parameters",
+        action="store_true",
+        help="Calculate per-bubble rotational-fit parameters and save/visualize them with other parameters.",
+    )
+    parser.add_argument("--rotational-fit-csv", default="rotational_fit_parameters.csv")
+    parser.add_argument("--rotational-fit-n-sections", type=int, default=50)
+    parser.add_argument("--rotational-fit-min-points-per-section", type=int, default=5)
+    parser.add_argument(
+        "--rotational-fit-radius-statistic",
+        choices=["median", "percentile"],
+        default="median",
+    )
+    parser.add_argument("--rotational-fit-max-surface-points", type=int, default=500_000)
+
+    parser.add_argument(
+        "--front-back-eccentricity",
+        action="store_true",
+        help="Calculate per-bubble front/tip and back/tail eccentricity with clipping checks.",
+    )
+    parser.add_argument("--front-back-eccentricity-csv", default="front_back_eccentricity_parameters.csv")
+    parser.add_argument("--front-back-edge-margin-mm", type=float, default=0.1)
+    parser.add_argument("--front-back-min-tip-points", type=int, default=20)
+    parser.add_argument("--front-back-max-points", type=int, default=500_000)
+
+    parser.add_argument(
         "--validate-fit-score",
         action="store_true",
         help="Run synthetic validation of rotational_fit_score() and exit.",
@@ -139,6 +164,17 @@ def build_config(args: argparse.Namespace) -> ReconstructionConfig:
         tracking_labels=args.tracking_labels,
         preview_parameter_labels=args.preview_parameter_labels,
         eccentricity=args.eccentricity or args.eccentricity_visualize or args.preview_parameter_labels or args.annotate_frame_parameters,
+        rotational_fit_parameters=args.rotational_fit_parameters or args.preview_parameter_labels,
+        rotational_fit_csv=args.rotational_fit_csv,
+        rotational_fit_n_sections=args.rotational_fit_n_sections,
+        rotational_fit_min_points_per_section=args.rotational_fit_min_points_per_section,
+        rotational_fit_radius_statistic=args.rotational_fit_radius_statistic,
+        rotational_fit_max_surface_points=args.rotational_fit_max_surface_points,
+        front_back_eccentricity=args.front_back_eccentricity or args.preview_parameter_labels,
+        front_back_eccentricity_csv=args.front_back_eccentricity_csv,
+        front_back_edge_margin_mm=args.front_back_edge_margin_mm,
+        front_back_min_tip_points=args.front_back_min_tip_points,
+        front_back_max_points=args.front_back_max_points,
         parameters_dir=args.parameters_dir,
         tip_percentile=args.tip_percentile,
         eccentricity_debug=args.eccentricity_debug,

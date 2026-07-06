@@ -80,6 +80,23 @@ class ReconstructionConfig:
     eccentricity_visualize_every: int = 1
     eccentricity_visualize_max_points: int = 200_000
 
+    # Optional per-bubble rotational-fit parameters.
+    # Enabled from CLI with --rotational-fit-parameters.
+    rotational_fit_parameters: bool = False
+    rotational_fit_csv: str = "rotational_fit_parameters.csv"
+    rotational_fit_n_sections: int = 50
+    rotational_fit_min_points_per_section: int = 5
+    rotational_fit_radius_statistic: str = "median"
+    rotational_fit_max_surface_points: int = 500_000
+
+    # Optional front/back eccentricity parameter from the uploaded validation code.
+    # Enabled from CLI with --front-back-eccentricity.
+    front_back_eccentricity: bool = False
+    front_back_eccentricity_csv: str = "front_back_eccentricity_parameters.csv"
+    front_back_edge_margin_mm: float = 0.1
+    front_back_min_tip_points: int = 20
+    front_back_max_points: int = 500_000
+
     center_radial_xy: bool = True
     preview_max_points: int = 200_000
     preview_point_size: float = 3.0

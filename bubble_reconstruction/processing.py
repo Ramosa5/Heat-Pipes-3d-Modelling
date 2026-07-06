@@ -10,15 +10,22 @@ from .config import ReconstructionConfig
 from .export_io import safe_stem, save_mask, save_point_cloud_from_volume
 from .frame_annotation import save_parameter_overlay_frame
 from .fit_score import rotational_fit_score
+from .front_back_eccentricity import (
+    calculate_front_back_eccentricity_for_bubbles,
+    front_back_eccentricity_label_map,
+)
 from .bubble_physics import summarize_rectified_mask_parameters
 from .eccentricity import eccentricity_records_for_points
 from .parameter_export import (
     ECCENTRICITY_FIELDS,
     MASK_PARAMETER_FIELDS,
     TRACKING_FIELDS,
+    ROTATIONAL_FIT_PARAMETER_FIELDS,
+    FRONT_BACK_ECCENTRICITY_FIELDS,
     append_dict_rows,
 )
 from .pipe import build_pipe_cylinder_mesh_from_rectified_shape
+from .rotational_fit_parameters import calculate_rotational_fit_for_bubbles, rotational_fit_label_map
 from .reconstruction import reconstruct_pair_no_stick_with_bubbles
 from .rectification import rectify_and_align_pair
 from .tube_geometry import point_in_tube
@@ -218,12 +225,107 @@ def calculate_and_save_frame_parameters(file_name: str,
 
     return eccentricity_rows, mask_parameter_rows
 
+def calculate_and_save_rotational_fit_parameters(file_name: str,
+                                                 frame_no: int,
+                                                 bubbles_12: list[dict[str, Any]],
+                                                 bubbles_34: list[dict[str, Any]],
+                                                 config: ReconstructionConfig) -> list[dict[str, object]]:
+    """Calculate per-bubble rotational-fit parameters for this frame."""
+    if not config.rotational_fit_parameters:
+        return []
+
+    rows: list[dict[str, object]] = []
+    for tube_pair, bubbles in (("tube12", bubbles_12), ("tube34", bubbles_34)):
+        rows.extend(
+            calculate_rotational_fit_for_bubbles(
+                bubbles=bubbles,
+                frame_no=frame_no,
+                file_name=file_name,
+                tube_pair=tube_pair,
+                center_radial_xy=config.center_radial_xy,
+                max_points=config.rotational_fit_max_surface_points,
+                n_sections=config.rotational_fit_n_sections,
+                min_points_per_section=config.rotational_fit_min_points_per_section,
+                radius_statistic=config.rotational_fit_radius_statistic,
+            )
+        )
+
+    if rows:
+        append_dict_rows(
+            os.path.join(config.parameters_dir, config.rotational_fit_csv),
+            rows,
+            ROTATIONAL_FIT_PARAMETER_FIELDS,
+        )
+        for row in rows:
+            err = row.get("rotational_fit_mean_error_mm")
+            radius = row.get("rotational_fit_radius_mm")
+            print(
+                f"[ROT-FIT] frame={frame_no} {row['tube_pair']} "
+                f"bubble={int(row['bubble_index'])} "
+                f"I_rot={float(row['rotational_fit_score']):.3f} "
+                f"err={0.0 if err is None else float(err):.3f} mm "
+                f"R={0.0 if radius is None else float(radius):.3f} mm"
+            )
+
+    return rows
+
+
+def calculate_and_save_front_back_eccentricity_parameters(file_name: str,
+                                                            frame_no: int,
+                                                            bubbles_12: list[dict[str, Any]],
+                                                            bubbles_34: list[dict[str, Any]],
+                                                            config: ReconstructionConfig) -> list[dict[str, object]]:
+    """Calculate front/tip and back/tail eccentricity for every reconstructed bubble."""
+    if not config.front_back_eccentricity:
+        return []
+
+    rows: list[dict[str, object]] = []
+    for tube_pair, bubbles in (("tube12", bubbles_12), ("tube34", bubbles_34)):
+        rows.extend(
+            calculate_front_back_eccentricity_for_bubbles(
+                bubbles=bubbles,
+                frame_no=frame_no,
+                file_name=file_name,
+                tube_pair=tube_pair,
+                diameter_mm=config.diameter_mm,
+                center_radial_xy=config.center_radial_xy,
+                tip_percentile=config.tip_percentile,
+                edge_margin_mm=config.front_back_edge_margin_mm,
+                min_tip_points=config.front_back_min_tip_points,
+                max_points=config.front_back_max_points,
+            )
+        )
+
+    if rows:
+        append_dict_rows(
+            os.path.join(config.parameters_dir, config.front_back_eccentricity_csv),
+            rows,
+            FRONT_BACK_ECCENTRICITY_FIELDS,
+        )
+        for row in rows:
+            front = row.get("front_eccentricity")
+            back = row.get("back_eccentricity")
+            front_txt = "clipped" if row.get("front_clipped") else ("None" if front is None else f"{float(front):.4f}")
+            back_txt = "clipped" if row.get("back_clipped") else ("None" if back is None else f"{float(back):.4f}")
+            print(
+                f"[FB-ECC] frame={frame_no} {row['tube_pair']} "
+                f"bubble={int(row['bubble_index'])} "
+                f"front={front_txt} back={back_txt}"
+            )
+
+    return rows
+
+
 def build_preview_parameter_labels(tracking_rows: list[dict[str, object]],
                                    eccentricity_rows: list[dict[str, object]],
+                                   rotational_fit_rows: list[dict[str, object]],
+                                   front_back_rows: list[dict[str, object]],
                                    tube_pair: str) -> list[dict[str, object]]:
     """Build multi-line per-bubble labels for the 3D PyVista preview."""
     track_rows = [row for row in tracking_rows if str(row.get("tube_pair", "")) == tube_pair]
     ecc_rows = [row for row in eccentricity_rows if str(row.get("tube_pair", "")) == tube_pair]
+    rot_map = rotational_fit_label_map(rotational_fit_rows, tube_pair)
+    fb_map = front_back_eccentricity_label_map(front_back_rows, tube_pair)
 
     if not track_rows:
         return []
@@ -237,18 +339,46 @@ def build_preview_parameter_labels(tracking_rows: list[dict[str, object]],
     labels: list[dict[str, object]] = []
     for i, track_row in enumerate(track_rows):
         ecc_row = ecc_rows[i] if i < len(ecc_rows) else None
+        detection_index = int(track_row.get("detection_index", 0))
+        rot_row = rot_map.get(detection_index)
+        fb_row = fb_map.get(detection_index)
         lines = [
-            f"ID {int(track_row['track_id'])}",
-            f"det {int(track_row['detection_index'])}",
-            f"z {float(track_row['centroid_z_mm']):.2f} mm",
-            f"V {int(track_row['volume_voxels'])} vox",
+            f"Tracking ID (ID): {int(track_row['track_id'])}",
+            # f"Detection index (det): {int(track_row['detection_index'])}",
+            # f"Axial centroid (z): {float(track_row['centroid_z_mm']):.2f} mm",
+            # f"Volume (V): {int(track_row['volume_voxels'])} voxels",
         ]
         if ecc_row is not None:
             lines.extend([
-                f"e* {float(ecc_row['e_star']):.3f}",
-                f"e_x {float(ecc_row['e_x_mm']):.2f} mm",
-                f"e_y {float(ecc_row['e_y_mm']):.2f} mm",
+                # f"Tip eccentricity (e*): {float(ecc_row['e_star']):.3f}",
+                # f"Tip X offset (e_x): {float(ecc_row['e_x_mm']):.2f} mm",
+                # f"Tip Y offset (e_y): {float(ecc_row['e_y_mm']):.2f} mm",
             ])
+        if rot_row is not None:
+            rot_err = rot_row.get("rotational_fit_mean_error_mm")
+            rot_r = rot_row.get("rotational_fit_radius_mm")
+            lines.extend([
+                f"Rotational fit index (I_rot): {float(rot_row['rotational_fit_score']):.3f}",
+                f"Mean fit error (err): {0.0 if rot_err is None else float(rot_err):.2f} mm",
+                f"Reference radius (R): {0.0 if rot_r is None else float(rot_r):.2f} mm",
+            ])
+        if fb_row is not None:
+            front = fb_row.get("front_eccentricity")
+            back = fb_row.get("back_eccentricity")
+            front_txt = "clipped" if fb_row.get("front_clipped") else ("None" if front is None else f"{float(front):.3f}")
+            back_txt = "clipped" if fb_row.get("back_clipped") else ("None" if back is None else f"{float(back):.3f}")
+            fx = fb_row.get("front_shift_x_mm")
+            fy = fb_row.get("front_shift_y_mm")
+            bx = fb_row.get("back_shift_x_mm")
+            by = fb_row.get("back_shift_y_mm")
+            lines.extend([
+                f"Front eccentricity (e_front): {front_txt}",
+                f"Back eccentricity (e_back): {back_txt}",
+            ])
+            if fx is not None and fy is not None:
+                lines.append(f"Front X,Y shift (Fxy): {float(fx):.2f}, {float(fy):.2f} mm")
+            if bx is not None and by is not None:
+                lines.append(f"Back X,Y shift (Bxy): {float(bx):.2f}, {float(by):.2f} mm")
 
         labels.append({
             "position": (
@@ -423,8 +553,24 @@ def process_frame(img_info: dict[str, Any],
         config=config,
     )
 
-    parameter_labels_12 = build_preview_parameter_labels(tracking_rows, eccentricity_rows, "tube12") if config.preview_parameter_labels else []
-    parameter_labels_34 = build_preview_parameter_labels(tracking_rows, eccentricity_rows, "tube34") if config.preview_parameter_labels else []
+    rotational_fit_rows = calculate_and_save_rotational_fit_parameters(
+        file_name=img_info["file_name"],
+        frame_no=global_frame_no,
+        bubbles_12=bubbles_12,
+        bubbles_34=bubbles_34,
+        config=config,
+    )
+
+    front_back_eccentricity_rows = calculate_and_save_front_back_eccentricity_parameters(
+        file_name=img_info["file_name"],
+        frame_no=global_frame_no,
+        bubbles_12=bubbles_12,
+        bubbles_34=bubbles_34,
+        config=config,
+    )
+
+    parameter_labels_12 = build_preview_parameter_labels(tracking_rows, eccentricity_rows, rotational_fit_rows, front_back_eccentricity_rows, "tube12") if config.preview_parameter_labels else []
+    parameter_labels_34 = build_preview_parameter_labels(tracking_rows, eccentricity_rows, rotational_fit_rows, front_back_eccentricity_rows, "tube34") if config.preview_parameter_labels else []
 
     if config.annotate_frame_parameters:
         masks_by_tube = {
