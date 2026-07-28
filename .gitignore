@@ -4,3 +4,4 @@
 *.csv
 *.jpg
 *.png
+/summary_visualization

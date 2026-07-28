@@ -344,15 +344,15 @@ def build_preview_parameter_labels(tracking_rows: list[dict[str, object]],
         fb_row = fb_map.get(detection_index)
         lines = [
             f"Tracking ID (ID): {int(track_row['track_id'])}",
-            # f"Detection index (det): {int(track_row['detection_index'])}",
-            # f"Axial centroid (z): {float(track_row['centroid_z_mm']):.2f} mm",
-            # f"Volume (V): {int(track_row['volume_voxels'])} voxels",
+            f"Detection index (det): {int(track_row['detection_index'])}",
+            f"Axial centroid (z): {float(track_row['centroid_z_mm']):.2f} mm",
+            f"Volume (V): {int(track_row['volume_voxels'])} voxels",
         ]
         if ecc_row is not None:
             lines.extend([
-                # f"Tip eccentricity (e*): {float(ecc_row['e_star']):.3f}",
-                # f"Tip X offset (e_x): {float(ecc_row['e_x_mm']):.2f} mm",
-                # f"Tip Y offset (e_y): {float(ecc_row['e_y_mm']):.2f} mm",
+                f"Tip eccentricity (e*): {float(ecc_row['e_star']):.3f}",
+                f"Tip X offset (e_x): {float(ecc_row['e_x_mm']):.2f} mm",
+                f"Tip Y offset (e_y): {float(ecc_row['e_y_mm']):.2f} mm",
             ])
         if rot_row is not None:
             rot_err = rot_row.get("rotational_fit_mean_error_mm")
@@ -631,6 +631,9 @@ def process_frame(img_info: dict[str, Any],
 
     return {
         "title": f"Frame {global_frame_no}: {img_info['file_name']}",
+        "frame_no": global_frame_no,
+        "file_name": img_info["file_name"],
+        "frame_image": gray.copy(),
         "vol_12": vol_12,
         "vox_12": voxel_mm_12,
         "pipe_mesh_12": pipe_mesh_12,
@@ -641,6 +644,10 @@ def process_frame(img_info: dict[str, Any],
         "pipe_mesh_34": pipe_mesh_34,
         "track_labels_34": track_labels_34,
         "parameter_labels_34": parameter_labels_34,
+        "tracking_rows": tracking_rows,
+        "eccentricity_rows": eccentricity_rows,
+        "rotational_fit_rows": rotational_fit_rows,
+        "front_back_eccentricity_rows": front_back_eccentricity_rows,
     }
 
 
@@ -705,6 +712,15 @@ def run_pipeline(config: ReconstructionConfig) -> list[dict[str, Any]]:
             show_origin_marker=config.show_origin_marker,
             show_tracking_labels=config.tracking_labels,
             show_parameter_labels=config.preview_parameter_labels,
+            fullscreen=config.preview_fullscreen,
+            compact=config.preview_compact,
+            window_size=(config.preview_window_width, config.preview_window_height),
+            distance_scale=config.preview_distance_scale,
         )
+
+    if config.summary_visualization:
+        from .summary_visualization import show_summary_visualization
+
+        show_summary_visualization(frames_data, config)
 
     return frames_data

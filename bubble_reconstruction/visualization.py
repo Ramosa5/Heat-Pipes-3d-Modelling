@@ -125,7 +125,11 @@ def pv_live_animate_keep_last(frames_data,
                               center_view_on_origin: bool = True,
                               show_origin_marker: bool = True,
                               show_tracking_labels: bool = False,
-                              show_parameter_labels: bool = False):
+                              show_parameter_labels: bool = False,
+                              fullscreen: bool = False,
+                              compact: bool = False,
+                              window_size: tuple[int, int] = (1500, 720),
+                              distance_scale: float = 1.0):
     def safe_pts(vol, vox):
         pts = volume_to_points_mm(vol, vox, center_radial_xy=center_radial_xy, max_points=max_points)
         if pts is None:
@@ -222,7 +226,107 @@ def pv_live_animate_keep_last(frames_data,
         except Exception:
             return None
 
-    p = pv.Plotter(shape=(1, 2), window_size=(1500, 720), off_screen=False, title="Bubbles + Z-axis cylindrical pipe (live)")
+    def _screen_panel_text(fd, key, title: str) -> str | None:
+        label_records = fd.get(key, []) or []
+        if not label_records:
+            return None
+        blocks = []
+        for idx, item in enumerate(label_records, start=1):
+            label_text = str(item.get("label", "")).strip()
+            if not label_text:
+                continue
+            blocks.append(f"{title} #{idx}\n{label_text}")
+        if not blocks:
+            return None
+        return "\n\n".join(blocks)
+
+    def add_screen_label_panel(plotter,
+                               fd,
+                               key,
+                               title: str,
+                               position: str = "lower_left",
+                               font_size: int = 8):
+        """Add a fixed viewport text panel so labels stay visible even near screen edges."""
+        text_value = _screen_panel_text(fd, key, title)
+        if not text_value:
+            return None
+        try:
+            return plotter.add_text(
+                text_value,
+                position=position,
+                font_size=int(font_size),
+                color="black",
+                shadow=False,
+                name=f"screen_panel_{key}",
+            )
+        except TypeError:
+            try:
+                return plotter.add_text(
+                    text_value,
+                    position=position,
+                    font_size=int(font_size),
+                    color="black",
+                )
+            except Exception:
+                return None
+        except Exception:
+            return None
+
+    # Optional compact mode keeps the preview visually cleaner when there are many labels.
+    preview_point_size = min(float(point_size), 2.0) if compact else float(point_size)
+    title_font_size = 10 if compact else 12
+    parameter_label_font_size = 8 if compact else 10
+    tracking_label_font_size = 11 if compact else 14
+    panel_font_size = 6 if compact else 7
+    tracking_panel_font_size = 7 if compact else 8
+    effective_pipe_opacity = min(float(pipe_opacity), 0.25) if compact else float(pipe_opacity)
+    # This controls the initial visual scale of the pipes.
+    # It is intentionally stronger than the previous compact mode because the user wants
+    # the view to start as if the mouse wheel/scrollbar had already zoomed out.
+    distance_scale = max(1.0, float(distance_scale))
+    compact_min_zoom_out = 6.0
+    effective_zoom_out = (max(float(zoom_out), compact_min_zoom_out) if compact else float(zoom_out)) * distance_scale
+    camera_scroll_zoom = max(1.0, (3.0 if compact else 1.0) * distance_scale)
+
+    safe_window_size = tuple(int(v) for v in window_size)
+    if fullscreen:
+        # Fallback size for systems where VTK fullscreen is ignored by the window manager.
+        safe_window_size = (max(safe_window_size[0], 1920), max(safe_window_size[1], 1080))
+
+    p = pv.Plotter(shape=(1, 2), window_size=safe_window_size, off_screen=False, title="Bubbles + Z-axis cylindrical pipe (live)")
+
+    def apply_fullscreen(plotter):
+        """Best-effort fullscreen/maximized start for PyVista/VTK across backends."""
+        if not fullscreen:
+            return
+        try:
+            plotter.window_size = safe_window_size
+        except Exception:
+            pass
+        try:
+            plotter.render_window.SetFullScreen(True)
+        except Exception:
+            pass
+        try:
+            plotter.ren_win.SetFullScreen(True)
+        except Exception:
+            pass
+
+    def apply_start_zoom_out(plotter, scale: float) -> None:
+        """Apply an extra scroll-wheel-like zoom out after camera placement."""
+        scale = max(1.0, float(scale))
+        if scale <= 1.0:
+            return
+        try:
+            plotter.camera.distance = float(plotter.camera.distance) * scale
+        except Exception:
+            pass
+        try:
+            plotter.camera.zoom(1.0 / scale)
+        except Exception:
+            pass
+
+    apply_fullscreen(p)
 
     # Lepsze renderowanie przezroczystości w PyVista/VTK, jeśli dana wersja to obsługuje.
     try:
@@ -238,36 +342,42 @@ def pv_live_animate_keep_last(frames_data,
     pipe_mesh_b = safe_pipe_mesh(fd0, "pipe_mesh_34")
 
     p.subplot(0, 0)
-    p.add_text("Bubble 3D + Z-axis pipe (tube1&2)", font_size=12)
+    p.add_text("Bubble 3D + Z-axis pipe (tube1&2)", font_size=title_font_size)
     if show_pipe and pipe_mesh_a.n_cells > 0:
         # Półprzezroczysty cylinder rurki.
-        p.add_mesh(pipe_mesh_a, opacity=pipe_opacity, color="lightgray", scalars=None, show_scalar_bar=False)
-    p.add_points(poly_a, render_points_as_spheres=True, point_size=point_size)
+        p.add_mesh(pipe_mesh_a, opacity=effective_pipe_opacity, color="lightgray", scalars=None, show_scalar_bar=False)
+    p.add_points(poly_a, render_points_as_spheres=True, point_size=preview_point_size)
     if show_origin_marker:
         add_coordinate_origin_marker(p, radius_mm=0.06 * 20.0)
     p.add_axes()
     p.show_grid()
     label_actor_a = None
+    panel_actor_a = None
     if show_parameter_labels:
-        label_actor_a = add_labels(p, fd0, "parameter_labels_12", font_size=10, text_color="black", shape_opacity=0.45)
+        label_actor_a = add_labels(p, fd0, "parameter_labels_12", font_size=parameter_label_font_size, text_color="black", shape_opacity=0.45)
+        panel_actor_a = add_screen_label_panel(p, fd0, "parameter_labels_12", title="Bubble", position="lower_left", font_size=panel_font_size)
     elif show_tracking_labels:
-        label_actor_a = add_labels(p, fd0, "track_labels_12", font_size=14, text_color="black", shape_opacity=0.35)
+        label_actor_a = add_labels(p, fd0, "track_labels_12", font_size=tracking_label_font_size, text_color="black", shape_opacity=0.35)
+        panel_actor_a = add_screen_label_panel(p, fd0, "track_labels_12", title="Bubble", position="lower_left", font_size=tracking_panel_font_size)
 
     p.subplot(0, 1)
-    p.add_text("Bubble 3D + Z-axis pipe (tube3&4)", font_size=12)
+    p.add_text("Bubble 3D + Z-axis pipe (tube3&4)", font_size=title_font_size)
     if show_pipe and pipe_mesh_b.n_cells > 0:
         # Półprzezroczysty cylinder rurki.
-        p.add_mesh(pipe_mesh_b, opacity=pipe_opacity, color="lightgray", scalars=None, show_scalar_bar=False)
-    p.add_points(poly_b, render_points_as_spheres=True, point_size=point_size)
+        p.add_mesh(pipe_mesh_b, opacity=effective_pipe_opacity, color="lightgray", scalars=None, show_scalar_bar=False)
+    p.add_points(poly_b, render_points_as_spheres=True, point_size=preview_point_size)
     if show_origin_marker:
         add_coordinate_origin_marker(p, radius_mm=0.06 * 20.0)
     p.add_axes()
     p.show_grid()
     label_actor_b = None
+    panel_actor_b = None
     if show_parameter_labels:
-        label_actor_b = add_labels(p, fd0, "parameter_labels_34", font_size=10, text_color="black", shape_opacity=0.45)
+        label_actor_b = add_labels(p, fd0, "parameter_labels_34", font_size=parameter_label_font_size, text_color="black", shape_opacity=0.45)
+        panel_actor_b = add_screen_label_panel(p, fd0, "parameter_labels_34", title="Bubble", position="lower_left", font_size=panel_font_size)
     elif show_tracking_labels:
-        label_actor_b = add_labels(p, fd0, "track_labels_34", font_size=14, text_color="black", shape_opacity=0.35)
+        label_actor_b = add_labels(p, fd0, "track_labels_34", font_size=tracking_label_font_size, text_color="black", shape_opacity=0.35)
+        panel_actor_b = add_screen_label_panel(p, fd0, "track_labels_34", title="Bubble", position="lower_left", font_size=tracking_panel_font_size)
 
     p.link_views()
 
@@ -275,28 +385,40 @@ def pv_live_animate_keep_last(frames_data,
     # Do NOT use reset_camera() here, because it centres the view on object bounds.
     # Requirement: centre of the view must be the coordinate-system origin (0,0,0).
     if center_view_on_origin:
-        view_distance_mm = estimate_origin_view_distance_from_frame(fd0, zoom_out=zoom_out)
+        view_distance_mm = estimate_origin_view_distance_from_frame(fd0, zoom_out=effective_zoom_out)
         p.subplot(0, 0)
         set_camera_centered_on_coordinate_origin(p, view_distance_mm, origin=(0.0, 0.0, 0.0))
+        apply_start_zoom_out(p, camera_scroll_zoom)
         p.subplot(0, 1)
         set_camera_centered_on_coordinate_origin(p, view_distance_mm, origin=(0.0, 0.0, 0.0))
+        apply_start_zoom_out(p, camera_scroll_zoom)
     else:
         p.reset_camera()
 
         # twarde oddalenie (distance)
         try:
-            p.camera.distance = float(p.camera.distance) * float(zoom_out)
+            p.camera.distance = float(p.camera.distance) * float(effective_zoom_out)
         except Exception:
             pass
 
         # dodatkowe "zoom out" (mniej niż 1 oddala)
         try:
-            p.camera.zoom(1.0 / float(zoom_out))
+            p.camera.zoom(1.0 / float(effective_zoom_out))
         except Exception:
             pass
 
     try:
         p.show(auto_close=False, interactive_update=True)
+        apply_fullscreen(p)
+        if center_view_on_origin:
+            view_distance_mm = estimate_origin_view_distance_from_frame(fd0, zoom_out=effective_zoom_out)
+            p.subplot(0, 0)
+            set_camera_centered_on_coordinate_origin(p, view_distance_mm, origin=(0.0, 0.0, 0.0))
+            apply_start_zoom_out(p, camera_scroll_zoom)
+            p.subplot(0, 1)
+            set_camera_centered_on_coordinate_origin(p, view_distance_mm, origin=(0.0, 0.0, 0.0))
+            apply_start_zoom_out(p, camera_scroll_zoom)
+            p.render()
     except TypeError:
         # fallback: cannot animate live in this version -> just show first frame blocking
         p.show(auto_close=True)
@@ -321,21 +443,35 @@ def pv_live_animate_keep_last(frames_data,
             except Exception:
                 pass
             try:
+                if panel_actor_a is not None:
+                    p.remove_actor(panel_actor_a)
+            except Exception:
+                pass
+            try:
                 if label_actor_b is not None:
                     p.remove_actor(label_actor_b)
+            except Exception:
+                pass
+            try:
+                if panel_actor_b is not None:
+                    p.remove_actor(panel_actor_b)
             except Exception:
                 pass
 
             p.subplot(0, 0)
             if show_parameter_labels:
-                label_actor_a = add_labels(p, fd, "parameter_labels_12", font_size=10, text_color="black", shape_opacity=0.45)
+                label_actor_a = add_labels(p, fd, "parameter_labels_12", font_size=parameter_label_font_size, text_color="black", shape_opacity=0.45)
+                panel_actor_a = add_screen_label_panel(p, fd, "parameter_labels_12", title="Bubble", position="lower_left", font_size=panel_font_size)
             else:
-                label_actor_a = add_labels(p, fd, "track_labels_12", font_size=14, text_color="black", shape_opacity=0.35)
+                label_actor_a = add_labels(p, fd, "track_labels_12", font_size=tracking_label_font_size, text_color="black", shape_opacity=0.35)
+                panel_actor_a = add_screen_label_panel(p, fd, "track_labels_12", title="Bubble", position="lower_left", font_size=tracking_panel_font_size)
             p.subplot(0, 1)
             if show_parameter_labels:
-                label_actor_b = add_labels(p, fd, "parameter_labels_34", font_size=10, text_color="black", shape_opacity=0.45)
+                label_actor_b = add_labels(p, fd, "parameter_labels_34", font_size=parameter_label_font_size, text_color="black", shape_opacity=0.45)
+                panel_actor_b = add_screen_label_panel(p, fd, "parameter_labels_34", title="Bubble", position="lower_left", font_size=panel_font_size)
             else:
-                label_actor_b = add_labels(p, fd, "track_labels_34", font_size=14, text_color="black", shape_opacity=0.35)
+                label_actor_b = add_labels(p, fd, "track_labels_34", font_size=tracking_label_font_size, text_color="black", shape_opacity=0.35)
+                panel_actor_b = add_screen_label_panel(p, fd, "track_labels_34", title="Bubble", position="lower_left", font_size=tracking_panel_font_size)
 
         p.render()
         if hasattr(p, "process_events"):

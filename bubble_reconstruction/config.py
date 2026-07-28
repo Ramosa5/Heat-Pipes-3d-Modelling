@@ -102,7 +102,23 @@ class ReconstructionConfig:
     preview_point_size: float = 3.0
     preview_pause_s: float = 0.25
     preview_zoom_out: float = 1.8
+    # Additional camera distance multiplier for the PyVista preview.
+    # Higher values make the pipes/bubbles start smaller, like scrolling backward in the viewer.
+    preview_distance_scale: float = 1.0
+    # Preview window/display options.
+    # --preview-fullscreen tries to start the PyVista/VTK window in fullscreen.
+    # --preview-compact reduces visual clutter: smaller labels, smaller points and more zoom-out.
+    preview_fullscreen: bool = False
+    preview_compact: bool = False
+    preview_window_width: int = 1500
+    preview_window_height: int = 720
     show_pipe: bool = True
     pipe_opacity: float = 0.5
     center_view_on_origin: bool = True
     show_origin_marker: bool = True
+
+    # End-of-processing summary window: top = original video frame, middle = 3D pipes,
+    # bottom = e(t) and eta(t) time-series for all tracked bubbles.
+    summary_visualization: bool = False
+    summary_pause_s: float = 0.20
+    summary_pipe_max_points: int = 120_000

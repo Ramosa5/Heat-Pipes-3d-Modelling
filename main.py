@@ -19,6 +19,42 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save-masks", action="store_true", help="Save original and rectified masks.")
     parser.add_argument("--save-point-clouds", action="store_true", help="Save reconstructed point clouds as PLY.")
     parser.add_argument("--no-preview", action="store_true", help="Disable the PyVista live preview window.")
+    parser.add_argument(
+        "--preview-fullscreen",
+        action="store_true",
+        help="Try to start the PyVista preview window in fullscreen mode.",
+    )
+    parser.add_argument(
+        "--preview-compact",
+        action="store_true",
+        help="Use a more minimal PyVista preview: smaller labels/points and a slightly more zoomed-out camera.",
+    )
+    parser.add_argument(
+        "--preview-window-size",
+        type=int,
+        nargs=2,
+        metavar=("WIDTH", "HEIGHT"),
+        default=(1500, 720),
+        help="PyVista preview window size used when fullscreen is not active. Default: 1500 720.",
+    )
+    parser.add_argument(
+        "--preview-distance-scale",
+        type=float,
+        default=1.0,
+        help="Extra PyVista camera distance/zoom-out multiplier. Use values like 3, 5, or 8 to make pipes start smaller, like scrolling backward.",
+    )
+
+    parser.add_argument(
+        "--summary-visualization",
+        action="store_true",
+        help="After processing, open one smooth summary window with the video frame on top, the pipes below, and e(t) / eta(t) diagrams for all tracked bubbles.",
+    )
+    parser.add_argument(
+        "--summary-pause-s",
+        type=float,
+        default=0.20,
+        help="Pause between frames in the end-of-processing summary visualization.",
+    )
 
     parser.add_argument("--diameter-mm", type=float, default=20.0)
     parser.add_argument("--voxel-mm", type=float, default=None)
@@ -146,6 +182,13 @@ def build_config(args: argparse.Namespace) -> ReconstructionConfig:
         save_masks=args.save_masks,
         save_point_clouds=args.save_point_clouds,
         show_preview=not args.no_preview,
+        preview_fullscreen=args.preview_fullscreen,
+        preview_compact=args.preview_compact,
+        preview_window_width=int(args.preview_window_size[0]),
+        preview_window_height=int(args.preview_window_size[1]),
+        preview_distance_scale=max(1.0, float(args.preview_distance_scale)),
+        summary_visualization=args.summary_visualization,
+        summary_pause_s=args.summary_pause_s,
         diameter_mm=args.diameter_mm,
         voxel_mm=args.voxel_mm,
         smooth_sigma_z=args.smooth_sigma_z,
@@ -156,15 +199,15 @@ def build_config(args: argparse.Namespace) -> ReconstructionConfig:
         point_clouds_dir=args.point_clouds_dir,
         annotate_frame_parameters=args.annotate_frame_parameters,
         annotated_frames_dir=args.annotated_frames_dir,
-        tracking=args.tracking or args.tracking_labels or args.preview_parameter_labels or args.annotate_frame_parameters,
+        tracking=args.tracking or args.tracking_labels or args.preview_parameter_labels or args.annotate_frame_parameters or args.summary_visualization,
         tracking_csv=args.tracking_csv,
         tracking_max_distance_mm=args.tracking_max_distance_mm,
         tracking_max_missing_frames=args.tracking_max_missing_frames,
         tracking_debug=args.tracking_debug,
         tracking_labels=args.tracking_labels,
         preview_parameter_labels=args.preview_parameter_labels,
-        eccentricity=args.eccentricity or args.eccentricity_visualize or args.preview_parameter_labels or args.annotate_frame_parameters,
-        rotational_fit_parameters=args.rotational_fit_parameters or args.preview_parameter_labels,
+        eccentricity=args.eccentricity or args.eccentricity_visualize or args.preview_parameter_labels or args.annotate_frame_parameters or args.summary_visualization,
+        rotational_fit_parameters=args.rotational_fit_parameters or args.preview_parameter_labels or args.summary_visualization,
         rotational_fit_csv=args.rotational_fit_csv,
         rotational_fit_n_sections=args.rotational_fit_n_sections,
         rotational_fit_min_points_per_section=args.rotational_fit_min_points_per_section,
