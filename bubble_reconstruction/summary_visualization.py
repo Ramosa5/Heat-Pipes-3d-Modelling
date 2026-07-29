@@ -60,6 +60,62 @@ def _grayscale_to_rgb(img: np.ndarray) -> np.ndarray:
     return arr.astype(np.uint8, copy=False)
 
 
+def _series_display_label(series_key: str) -> str:
+    key = str(series_key)
+    if "-ID" in key:
+        tube, track = key.split("-ID", 1)
+        return f"ID {track} ({tube})"
+    return key
+
+
+def build_summary_series_color_map(tracking_rows: list[dict[str, Any]]) -> dict[str, tuple[int, int, int]]:
+    """Return stable BGR colors for tracked bubble IDs.
+
+    The color depends only on the series key, not on how many bubbles are visible in
+    the current frame. Therefore the top-right frame labels, pipe labels, plots and
+    legend use the same color for a given ID across the whole animation.
+    """
+    series_keys = sorted({
+        f"{str(r.get('tube_pair', ''))}-ID{int(r.get('track_id', 0))}"
+        for r in (tracking_rows or [])
+        if r.get('tube_pair') is not None
+    })
+    palette = [
+        (31, 119, 180),   # blue, RGB
+        (255, 127, 14),   # orange
+        (44, 160, 44),    # green
+        (214, 39, 40),    # red
+        (148, 103, 189),  # purple
+        (140, 86, 75),    # brown
+        (227, 119, 194),  # pink
+        (127, 127, 127),  # gray
+        (188, 189, 34),   # olive
+        (23, 190, 207),   # cyan
+        (174, 199, 232),
+        (255, 187, 120),
+        (152, 223, 138),
+        (255, 152, 150),
+        (197, 176, 213),
+        (196, 156, 148),
+        (247, 182, 210),
+        (199, 199, 199),
+        (219, 219, 141),
+        (158, 218, 229),
+    ]
+    colors: dict[str, tuple[int, int, int]] = {}
+    for key in series_keys:
+        # deterministic checksum independent of Python's randomized hash()
+        checksum = sum((i + 1) * ord(ch) for i, ch in enumerate(key))
+        r, g, b = palette[checksum % len(palette)]
+        colors[key] = (int(b), int(g), int(r))  # BGR for OpenCV
+    return colors
+
+
+def _series_color_rgb(series_key: str, color_map_bgr: dict[str, tuple[int, int, int]]) -> tuple[float, float, float]:
+    bgr = color_map_bgr.get(series_key, (0, 0, 0))
+    return (bgr[2] / 255.0, bgr[1] / 255.0, bgr[0] / 255.0)
+
+
 def _estimate_origin_view_distance_from_frame(fd: dict[str, Any],
                                              min_distance_mm: float = 80.0,
                                              zoom_out: float = 1.8) -> float:
@@ -171,7 +227,7 @@ def _set_horizontal_pipe_camera(plotter, frame_data: dict[str, Any], suffix: str
         pass
 
 
-def _render_pipe_pyvista(frame_data: dict[str, Any], config, width: int = 1400, height: int = 330) -> np.ndarray | None:
+def _render_pipe_pyvista(frame_data: dict[str, Any], config, color_map_bgr: dict[str, tuple[int, int, int]] | None = None, width: int = 1400, height: int = 330) -> np.ndarray | None:
     if pv is None:
         return None
     try:
@@ -209,6 +265,7 @@ def _render_pipe_pyvista(frame_data: dict[str, Any], config, width: int = 1400, 
             plotter.add_axes()
         except Exception:
             pass
+        _add_bubble_id_labels(plotter, frame_data, suffix, color_map_bgr=color_map_bgr)
 
     # Independent side-view camera per subplot, so each pipe is horizontal and centered.
     panel_width = max(1, int(width // 2))
@@ -252,8 +309,8 @@ def _volume_projection_points(vol: np.ndarray | None, voxel_mm: float | None, ma
     return z_mm, x_mm
 
 
-def _render_pipe_projection(frame_data: dict[str, Any], config, width: int = 1400, height: int = 330) -> np.ndarray:
-    pyvista_img = _render_pipe_pyvista(frame_data, config, width=width, height=height)
+def _render_pipe_projection(frame_data: dict[str, Any], config, color_map_bgr: dict[str, tuple[int, int, int]] | None = None, width: int = 1400, height: int = 330) -> np.ndarray:
+    pyvista_img = _render_pipe_pyvista(frame_data, config, color_map_bgr=color_map_bgr, width=width, height=height)
     if pyvista_img is not None:
         return _pad_to_size(_resize_to_width(pyvista_img, width, max_height=height), width, height)
 
@@ -277,6 +334,14 @@ def _render_pipe_projection(frame_data: dict[str, Any], config, width: int = 140
         ax.plot([length_mm, length_mm], [-radius, radius], linewidth=1)
         if len(z_mm):
             ax.scatter(z_mm, x_mm, s=1, alpha=0.35)
+        tube_pair = f"tube{suffix}"
+        track_rows = [row for row in (frame_data.get("tracking_rows", []) or []) if str(row.get("tube_pair", "")) == tube_pair]
+        for row in track_rows:
+            zc = float(row.get("centroid_z_mm", 0.0))
+            yc = float(row.get("centroid_y_mm", 0.0))
+            series_key = f"{tube_pair}-ID{int(row.get('track_id', 0))}"
+            rgb = _series_color_rgb(series_key, color_map_bgr or {}) if color_map_bgr else (0.0, 0.0, 0.0)
+            ax.text(zc, yc, f"ID {int(row.get('track_id', 0))}", fontsize=7, ha="center", va="bottom", color=rgb, bbox=dict(facecolor="white", alpha=0.70, edgecolor="none", pad=1.5))
         ax.set_title(f"3D pipe projection ({title})")
         ax.set_xlabel("Z axis / pipe length [mm]")
         ax.set_ylabel("Radial X [mm]")
@@ -287,6 +352,43 @@ def _render_pipe_projection(frame_data: dict[str, Any], config, width: int = 140
     img = _fig_to_rgb(fig)
     img = _resize_to_width(img, width, max_height=height)
     return _pad_to_size(img, width, height)
+
+
+def _add_bubble_id_labels(plotter, frame_data: dict[str, Any], suffix: str, color_map_bgr: dict[str, tuple[int, int, int]] | None = None) -> None:
+    if pv is None:
+        return
+    tube_pair = f"tube{suffix}"
+    rows = [row for row in (frame_data.get("tracking_rows", []) or []) if str(row.get("tube_pair", "")) == tube_pair]
+    if not rows:
+        return
+    try:
+        rows = sorted(rows, key=lambda r: (float(r.get("centroid_z_mm", 0.0)), float(r.get("centroid_y_mm", 0.0))))
+        for row in rows:
+            point = [(
+                float(row.get("centroid_x_mm", 0.0)),
+                float(row.get("centroid_y_mm", 0.0)),
+                float(row.get("centroid_z_mm", 0.0)),
+            )]
+            label = [f"ID {int(row.get('track_id', 0))}"]
+            series_key = f"{tube_pair}-ID{int(row.get('track_id', 0))}"
+            bgr = (0, 0, 0) if color_map_bgr is None else color_map_bgr.get(series_key, (0, 0, 0))
+            text_color = (bgr[2] / 255.0, bgr[1] / 255.0, bgr[0] / 255.0)
+            plotter.add_point_labels(
+                point,
+                label,
+                point_size=0,
+                font_size=10,
+                text_color=text_color,
+                shape_color="white",
+                shape_opacity=0.65,
+                margin=2,
+                fill_shape=True,
+                always_visible=True,
+            )
+    except Exception:
+        pass
+
+
 
 
 def _extract_series(frames_data: list[dict[str, Any]]):
@@ -348,15 +450,36 @@ def _render_diagrams(frame_nos: list[int],
                      e_series: dict[str, np.ndarray],
                      eta_series: dict[str, np.ndarray],
                      current_frame_no: int,
+                     color_map_bgr: dict[str, tuple[int, int, int]] | None = None,
                      width: int = 1400,
                      height: int = 330) -> np.ndarray:
-    fig, (ax_e, ax_eta) = plt.subplots(1, 2, figsize=(14, 3.3), dpi=100)
-    for label, values in e_series.items():
-        ax_e.plot(frame_nos, values, marker="o", markersize=2.5, linewidth=1.2, label=label)
-    for label, values in eta_series.items():
-        ax_eta.plot(frame_nos, values, marker="o", markersize=2.5, linewidth=1.2, label=label)
-    ax_e.axvline(current_frame_no, linestyle="--", linewidth=1)
-    ax_eta.axvline(current_frame_no, linestyle="--", linewidth=1)
+    fig = plt.figure(figsize=(19, 4.2), dpi=100)
+    gs = fig.add_gridspec(1, 3, width_ratios=[1.0, 1.0, 1.15])
+    ax_e = fig.add_subplot(gs[0, 0])
+    ax_eta = fig.add_subplot(gs[0, 1])
+    ax_leg = fig.add_subplot(gs[0, 2])
+
+    handles = []
+    labels = []
+    ordered_labels = sorted(set(list(e_series.keys()) + list(eta_series.keys())))
+
+    for label in ordered_labels:
+        color = _series_color_rgb(label, color_map_bgr or {})
+        e_vals = e_series.get(label, None)
+        eta_vals = eta_series.get(label, None)
+        line_handle = None
+        if e_vals is not None:
+            (line_handle,) = ax_e.plot(frame_nos, e_vals, marker="o", markersize=2.5, linewidth=1.2, color=color)
+        if eta_vals is not None:
+            ax_eta.plot(frame_nos, eta_vals, marker="o", markersize=2.5, linewidth=1.2, color=color)
+        if line_handle is None and eta_vals is not None:
+            (line_handle,) = ax_eta.plot([], [], color=color)
+        if line_handle is not None:
+            handles.append(line_handle)
+            labels.append(_series_display_label(label))
+
+    ax_e.axvline(current_frame_no, linestyle="--", linewidth=1, color="black")
+    ax_eta.axvline(current_frame_no, linestyle="--", linewidth=1, color="black")
     ax_e.set_title("Eccentricity e(t)")
     ax_e.set_xlabel("Frame number")
     ax_e.set_ylabel("e(t) = e*")
@@ -373,10 +496,12 @@ def _render_diagrams(frame_nos: list[int],
         ax_eta.set_xlim(x_min - pad, x_max + pad)
     _set_ylim_from_series(ax_e, e_series, fallback=(0.0, 1.0))
     _set_ylim_from_series(ax_eta, eta_series, fallback=(0.0, 1.0))
-    if 0 < len(e_series) <= 12:
-        ax_e.legend(loc="upper left", fontsize=6, ncol=2)
-    if 0 < len(eta_series) <= 12:
-        ax_eta.legend(loc="upper left", fontsize=6, ncol=2)
+
+    ax_leg.axis("off")
+    if handles:
+        legend_ncol = 2 if len(handles) > 18 else 1
+        ax_leg.legend(handles, labels, loc="upper left", fontsize=7, ncol=legend_ncol, frameon=True, title="Bubble IDs", title_fontsize=8, borderaxespad=0.2, handlelength=1.6, columnspacing=0.9, labelspacing=0.35)
+
     fig.tight_layout()
     img = _fig_to_rgb(fig)
     img = _resize_to_width(img, width, max_height=height)
@@ -390,15 +515,29 @@ def _compose_dashboard(frame_data: dict[str, Any],
                        top_height: int = 330,
                        middle_height: int = 330,
                        bottom_height: int = 330) -> np.ndarray:
-    frame_rgb = _grayscale_to_rgb(frame_data["frame_image"])
-    frame_rgb = _resize_to_width(frame_rgb, canvas_width, max_height=top_height - 40)
-    frame_rgb = _pad_to_size(frame_rgb, canvas_width, top_height - 40)
+    left_img = _grayscale_to_rgb(frame_data["frame_image"])
+    right_src = frame_data.get("frame_image_with_ids", None)
+    right_img = _grayscale_to_rgb(right_src) if right_src is not None else left_img.copy()
+
+    panel_width = canvas_width // 2
+    panel_height = top_height - 40
+
+    left_img = _resize_to_width(left_img, panel_width, max_height=panel_height)
+    right_img = _resize_to_width(right_img, panel_width, max_height=panel_height)
+    left_img = _pad_to_size(left_img, panel_width, panel_height)
+    right_img = _pad_to_size(right_img, panel_width, panel_height)
+
+    top_row = np.hstack([left_img, right_img])
+
     header = np.full((40, canvas_width, 3), 245, dtype=np.uint8)
     title = f"Frame {int(frame_data.get('frame_no', 0))}: {frame_data.get('file_name', '')}"
     cv2.putText(header, title[:170], (12, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 0), 1, cv2.LINE_AA)
+    cv2.putText(header, "original frame", (150, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (70, 70, 70), 1, cv2.LINE_AA)
+    cv2.putText(header, "frame + bubble IDs", (canvas_width // 2 + 120, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (70, 70, 70), 1, cv2.LINE_AA)
+
     pipe_img = _pad_to_size(pipe_img, canvas_width, middle_height)
     diagrams_img = _pad_to_size(diagrams_img, canvas_width, bottom_height)
-    return np.vstack([header, frame_rgb, pipe_img, diagrams_img])
+    return np.vstack([header, top_row, pipe_img, diagrams_img])
 
 
 def _save_summary_outputs(frames: list[np.ndarray],
@@ -484,15 +623,19 @@ def show_summary_visualization(frames_data: list[dict[str, Any]], config) -> Non
         return
     print("[SUMMARY] Building summary visualization frames...")
     frame_nos, e_series, eta_series = _extract_series(frames_data)
-    canvas_width = 1400
+    all_tracking_rows = []
+    for _fd in frames_data:
+        all_tracking_rows.extend(_fd.get("tracking_rows", []) or [])
+    color_map_bgr = build_summary_series_color_map(all_tracking_rows)
+    canvas_width = 1650
     top_height = 330
     middle_height = 330
-    bottom_height = 330
+    bottom_height = 430
     dashboards: list[np.ndarray] = []
     for fd in frames_data:
         current_frame_no = int(fd.get("frame_no", 0))
-        pipe_img = _render_pipe_projection(fd, config, width=canvas_width, height=middle_height)
-        diagrams_img = _render_diagrams(frame_nos, e_series, eta_series, current_frame_no, width=canvas_width, height=bottom_height)
+        pipe_img = _render_pipe_projection(fd, config, color_map_bgr=color_map_bgr, width=canvas_width, height=middle_height)
+        diagrams_img = _render_diagrams(frame_nos, e_series, eta_series, current_frame_no, color_map_bgr=color_map_bgr, width=canvas_width, height=bottom_height)
         dashboards.append(_compose_dashboard(fd, pipe_img, diagrams_img, canvas_width, top_height, middle_height, bottom_height))
     output_fps = max(1.0, 1.0 / max(0.001, float(getattr(config, "summary_pause_s", 0.2))))
     print(f"[SUMMARY] Built {len(dashboards)} dashboard frames from {len(frames_data)} processed frames.")
@@ -510,7 +653,7 @@ def show_summary_visualization(frames_data: list[dict[str, Any]], config) -> Non
     window_name = "Bubble summary visualization"
     try:
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(window_name, 1400, 990)
+        cv2.resizeWindow(window_name, 1650, 1120)
         for frame in dashboards:
             cv2.imshow(window_name, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
             key = cv2.waitKey(pause_ms) & 0xFF

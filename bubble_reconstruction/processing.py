@@ -8,7 +8,7 @@ import cv2
 from .coco_utils import build_bubble_mask_from_anns, load_coco
 from .config import ReconstructionConfig
 from .export_io import safe_stem, save_mask, save_point_cloud_from_volume
-from .frame_annotation import save_parameter_overlay_frame
+from .frame_annotation import save_parameter_overlay_frame, build_parameter_overlay_frame
 from .fit_score import rotational_fit_score
 from .front_back_eccentricity import (
     calculate_front_back_eccentricity_for_bubbles,
@@ -572,17 +572,24 @@ def process_frame(img_info: dict[str, Any],
     parameter_labels_12 = build_preview_parameter_labels(tracking_rows, eccentricity_rows, rotational_fit_rows, front_back_eccentricity_rows, "tube12") if config.preview_parameter_labels else []
     parameter_labels_34 = build_preview_parameter_labels(tracking_rows, eccentricity_rows, rotational_fit_rows, front_back_eccentricity_rows, "tube34") if config.preview_parameter_labels else []
 
-    if config.annotate_frame_parameters:
+    frame_image_with_ids = None
+    if config.annotate_frame_parameters or config.summary_visualization:
         masks_by_tube = {
             0: mask1_orig,
             1: mask2_orig,
             2: mask3_orig,
             3: mask4_orig,
         }
-        save_parameter_overlay_frame(
+        summary_track_colors = None
+        if config.summary_visualization:
+            try:
+                from .summary_visualization import build_summary_series_color_map
+                summary_track_colors = build_summary_series_color_map(tracking_rows)
+            except Exception:
+                summary_track_colors = None
+
+        frame_image_with_ids = build_parameter_overlay_frame(
             gray,
-            out_dir=config.annotated_frames_dir,
-            file_stem=file_stem,
             tubes=config.tubes,
             tube_anns=tube_anns,
             masks_by_tube=masks_by_tube,
@@ -595,7 +602,33 @@ def process_frame(img_info: dict[str, Any],
             diameter_mm=config.diameter_mm,
             frame_no=global_frame_no,
             file_name=img_info["file_name"],
+            show_mask_overlay=False,
+            track_id_color_map=summary_track_colors,
+            label_mode="id_only",
         )
+
+    if config.annotate_frame_parameters:
+        out_path = os.path.join(config.annotated_frames_dir, f"{file_stem}_parameters.png")
+        parameter_frame = build_parameter_overlay_frame(
+            gray,
+            tubes=config.tubes,
+            tube_anns=tube_anns,
+            masks_by_tube=masks_by_tube,
+            rect_shapes={
+                "tube12": rect_top_12.shape,
+                "tube34": rect_top_34.shape,
+            },
+            tracking_rows=tracking_rows,
+            eccentricity_rows=eccentricity_rows,
+            diameter_mm=config.diameter_mm,
+            frame_no=global_frame_no,
+            file_name=img_info["file_name"],
+            show_mask_overlay=False,
+            track_id_color_map=summary_track_colors,
+            label_mode="parameters",
+        )
+        print(f"[SAVE] Zapisywana jest klatka z parametrami: {out_path}")
+        cv2.imwrite(out_path, parameter_frame)
 
     pipe_mesh_12 = None
     pipe_mesh_34 = None
@@ -634,6 +667,7 @@ def process_frame(img_info: dict[str, Any],
         "frame_no": global_frame_no,
         "file_name": img_info["file_name"],
         "frame_image": gray.copy(),
+        "frame_image_with_ids": frame_image_with_ids,
         "vol_12": vol_12,
         "vox_12": voxel_mm_12,
         "pipe_mesh_12": pipe_mesh_12,

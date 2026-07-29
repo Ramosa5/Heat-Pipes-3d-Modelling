@@ -207,7 +207,9 @@ def build_parameter_overlay_frame(gray_or_bgr: np.ndarray,
                                   diameter_mm: float,
                                   frame_no: int,
                                   file_name: str,
-                                  show_mask_overlay: bool = True) -> np.ndarray:
+                                  show_mask_overlay: bool = True,
+                                  track_id_color_map: dict[str, tuple[int, int, int]] | None = None,
+                                  label_mode: str = "parameters") -> np.ndarray:
     """
     Return an original video frame with per-bubble parameters drawn directly on it.
 
@@ -267,11 +269,23 @@ def build_parameter_overlay_frame(gray_or_bgr: np.ndarray,
                     pair_to_top_annotations[tube_pair], fallback_index, tube, w_img
                 )
             y = int(np.clip(y + vertical_offsets[tube_pair], 18, h_img - 5))
-            lines = _format_parameter_lines(track_row, ecc_row, fallback_index)
+            if str(label_mode).lower() == "id_only":
+                if track_row is not None:
+                    lines = [f"ID {int(track_row['track_id'])}"]
+                else:
+                    idx = _safe_int(ecc_row.get("bubble_index"), fallback_index) if ecc_row is not None else fallback_index
+                    lines = [f"B{idx}"]
+            else:
+                lines = _format_parameter_lines(track_row, ecc_row, fallback_index)
 
-            cv2.circle(out, (x, y), 4, color, -1)
-            cv2.line(out, (x, y), (min(w_img - 1, x + 8), max(0, y - 8)), color, 1)
-            _draw_text_block(out, min(w_img - 1, x + 10), max(18, y - 8), lines, color=color)
+            item_color = color
+            if track_row is not None and track_id_color_map is not None:
+                series_key = f"{tube_pair}-ID{int(track_row.get('track_id', 0))}"
+                item_color = tuple(int(v) for v in track_id_color_map.get(series_key, color))
+
+            cv2.circle(out, (x, y), 4, item_color, -1)
+            cv2.line(out, (x, y), (min(w_img - 1, x + 8), max(0, y - 8)), item_color, 1)
+            _draw_text_block(out, min(w_img - 1, x + 10), max(18, y - 8), lines, color=item_color)
 
     return out
 
