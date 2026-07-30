@@ -395,24 +395,37 @@ def _extract_series(frames_data: list[dict[str, Any]]):
     frame_nos = [int(fd.get("frame_no", i + 1)) for i, fd in enumerate(frames_data)]
     frame_to_idx = {frame_no: i for i, frame_no in enumerate(frame_nos)}
     track_map: dict[tuple[int, str, int], str] = {}
-    e_temp = defaultdict(lambda: np.full(len(frame_nos), np.nan, dtype=float))
+    e_left_temp = defaultdict(lambda: np.full(len(frame_nos), np.nan, dtype=float))
+    e_right_temp = defaultdict(lambda: np.full(len(frame_nos), np.nan, dtype=float))
     eta_temp = defaultdict(lambda: np.full(len(frame_nos), np.nan, dtype=float))
+
     for fd in frames_data:
         frame_no = int(fd["frame_no"])
         idx = frame_to_idx[frame_no]
+
         for tr in fd.get("tracking_rows", []) or []:
             tube = str(tr.get("tube_pair", ""))
             det = int(tr.get("detection_index", 0))
             track_id = int(tr.get("track_id", 0))
             track_map[(frame_no, tube, det)] = f"{tube}-ID{track_id}"
-        for er in fd.get("eccentricity_rows", []) or []:
-            tube = str(er.get("tube_pair", ""))
-            det = int(er.get("bubble_index", 0))
+
+        for fbr in fd.get("front_back_eccentricity_rows", []) or []:
+            tube = str(fbr.get("tube_pair", ""))
+            det = int(fbr.get("detection_index", fbr.get("bubble_index", 0)))
             label = track_map.get((frame_no, tube, det), f"{tube}-b{det}")
             try:
-                e_temp[label][idx] = float(er.get("e_star", np.nan))
+                value = fbr.get("front_eccentricity", np.nan)
+                if value is not None:
+                    e_left_temp[label][idx] = float(value)
             except Exception:
                 pass
+            try:
+                value = fbr.get("back_eccentricity", np.nan)
+                if value is not None:
+                    e_right_temp[label][idx] = float(value)
+            except Exception:
+                pass
+
         for rr in fd.get("rotational_fit_rows", []) or []:
             tube = str(rr.get("tube_pair", ""))
             det = int(rr.get("detection_index", 0))
@@ -421,8 +434,14 @@ def _extract_series(frames_data: list[dict[str, Any]]):
                 eta_temp[label][idx] = float(rr.get("rotational_fit_score", np.nan))
             except Exception:
                 pass
-    labels = sorted(set(e_temp.keys()) | set(eta_temp.keys()))
-    return frame_nos, {label: e_temp[label] for label in labels}, {label: eta_temp[label] for label in labels}
+
+    labels = sorted(set(e_left_temp.keys()) | set(e_right_temp.keys()) | set(eta_temp.keys()))
+    return (
+        frame_nos,
+        {label: e_left_temp[label] for label in labels},
+        {label: e_right_temp[label] for label in labels},
+        {label: eta_temp[label] for label in labels},
+    )
 
 
 def _set_ylim_from_series(ax, series_dict: dict[str, np.ndarray], fallback=(0.0, 1.0)):
@@ -447,59 +466,71 @@ def _set_ylim_from_series(ax, series_dict: dict[str, np.ndarray], fallback=(0.0,
 
 
 def _render_diagrams(frame_nos: list[int],
-                     e_series: dict[str, np.ndarray],
+                     e_left_series: dict[str, np.ndarray],
+                     e_right_series: dict[str, np.ndarray],
                      eta_series: dict[str, np.ndarray],
                      current_frame_no: int,
                      color_map_bgr: dict[str, tuple[int, int, int]] | None = None,
                      width: int = 1400,
                      height: int = 330) -> np.ndarray:
-    fig = plt.figure(figsize=(19, 4.2), dpi=100)
-    gs = fig.add_gridspec(1, 3, width_ratios=[1.0, 1.0, 1.15])
-    ax_e = fig.add_subplot(gs[0, 0])
-    ax_eta = fig.add_subplot(gs[0, 1])
-    ax_leg = fig.add_subplot(gs[0, 2])
+    fig = plt.figure(figsize=(22, 4.4), dpi=100)
+    gs = fig.add_gridspec(1, 4, width_ratios=[1.0, 1.0, 1.0, 1.10])
+    ax_left = fig.add_subplot(gs[0, 0])
+    ax_right = fig.add_subplot(gs[0, 1])
+    ax_eta = fig.add_subplot(gs[0, 2])
+    ax_leg = fig.add_subplot(gs[0, 3])
 
     handles = []
     labels = []
-    ordered_labels = sorted(set(list(e_series.keys()) + list(eta_series.keys())))
+    ordered_labels = sorted(set(list(e_left_series.keys()) + list(e_right_series.keys()) + list(eta_series.keys())))
 
     for label in ordered_labels:
         color = _series_color_rgb(label, color_map_bgr or {})
-        e_vals = e_series.get(label, None)
+        left_vals = e_left_series.get(label, None)
+        right_vals = e_right_series.get(label, None)
         eta_vals = eta_series.get(label, None)
         line_handle = None
-        if e_vals is not None:
-            (line_handle,) = ax_e.plot(frame_nos, e_vals, marker="o", markersize=2.5, linewidth=1.2, color=color)
+        if left_vals is not None:
+            (line_handle,) = ax_left.plot(frame_nos, left_vals, marker="o", markersize=2.4, linewidth=1.15, color=color)
+        if right_vals is not None:
+            ax_right.plot(frame_nos, right_vals, marker="o", markersize=2.4, linewidth=1.15, color=color)
         if eta_vals is not None:
-            ax_eta.plot(frame_nos, eta_vals, marker="o", markersize=2.5, linewidth=1.2, color=color)
-        if line_handle is None and eta_vals is not None:
-            (line_handle,) = ax_eta.plot([], [], color=color)
+            ax_eta.plot(frame_nos, eta_vals, marker="o", markersize=2.4, linewidth=1.15, color=color)
+        if line_handle is None:
+            if eta_vals is not None:
+                (line_handle,) = ax_eta.plot([], [], color=color)
+            elif right_vals is not None:
+                (line_handle,) = ax_right.plot([], [], color=color)
         if line_handle is not None:
             handles.append(line_handle)
             labels.append(_series_display_label(label))
 
-    ax_e.axvline(current_frame_no, linestyle="--", linewidth=1, color="black")
-    ax_eta.axvline(current_frame_no, linestyle="--", linewidth=1, color="black")
-    ax_e.set_title("Eccentricity e(t)")
-    ax_e.set_xlabel("Frame number")
-    ax_e.set_ylabel("e(t) = e*")
-    ax_e.grid(True, alpha=0.25)
+    for ax in (ax_left, ax_right, ax_eta):
+        ax.axvline(current_frame_no, linestyle="--", linewidth=1, color="black")
+        ax.grid(True, alpha=0.25)
+        ax.set_xlabel("Frame number")
+
+    ax_left.set_title("Left-side eccentricity e_left(t)")
+    ax_left.set_ylabel("e_left(t)")
+    ax_right.set_title("Right-side eccentricity e_right(t)")
+    ax_right.set_ylabel("e_right(t)")
     ax_eta.set_title("Rotational-fit index eta(t)")
-    ax_eta.set_xlabel("Frame number")
     ax_eta.set_ylabel("eta(t) = I_rot")
-    ax_eta.grid(True, alpha=0.25)
+
     if frame_nos:
         x_min = min(frame_nos)
         x_max = max(frame_nos)
         pad = max(1, int(0.03 * max(1, x_max - x_min + 1)))
-        ax_e.set_xlim(x_min - pad, x_max + pad)
-        ax_eta.set_xlim(x_min - pad, x_max + pad)
-    _set_ylim_from_series(ax_e, e_series, fallback=(0.0, 1.0))
+        for ax in (ax_left, ax_right, ax_eta):
+            ax.set_xlim(x_min - pad, x_max + pad)
+
+    _set_ylim_from_series(ax_left, e_left_series, fallback=(0.0, 1.0))
+    _set_ylim_from_series(ax_right, e_right_series, fallback=(0.0, 1.0))
     _set_ylim_from_series(ax_eta, eta_series, fallback=(0.0, 1.0))
 
     ax_leg.axis("off")
     if handles:
-        legend_ncol = 2 if len(handles) > 18 else 1
+        legend_ncol = 2 if len(handles) > 22 else 1
         ax_leg.legend(handles, labels, loc="upper left", fontsize=7, ncol=legend_ncol, frameon=True, title="Bubble IDs", title_fontsize=8, borderaxespad=0.2, handlelength=1.6, columnspacing=0.9, labelspacing=0.35)
 
     fig.tight_layout()
@@ -622,7 +653,7 @@ def show_summary_visualization(frames_data: list[dict[str, Any]], config) -> Non
         print("[SUMMARY] No frame data available for summary visualization.")
         return
     print("[SUMMARY] Building summary visualization frames...")
-    frame_nos, e_series, eta_series = _extract_series(frames_data)
+    frame_nos, e_left_series, e_right_series, eta_series = _extract_series(frames_data)
     all_tracking_rows = []
     for _fd in frames_data:
         all_tracking_rows.extend(_fd.get("tracking_rows", []) or [])
@@ -630,12 +661,12 @@ def show_summary_visualization(frames_data: list[dict[str, Any]], config) -> Non
     canvas_width = 1650
     top_height = 330
     middle_height = 330
-    bottom_height = 430
+    bottom_height = 440
     dashboards: list[np.ndarray] = []
     for fd in frames_data:
         current_frame_no = int(fd.get("frame_no", 0))
         pipe_img = _render_pipe_projection(fd, config, color_map_bgr=color_map_bgr, width=canvas_width, height=middle_height)
-        diagrams_img = _render_diagrams(frame_nos, e_series, eta_series, current_frame_no, color_map_bgr=color_map_bgr, width=canvas_width, height=bottom_height)
+        diagrams_img = _render_diagrams(frame_nos, e_left_series, e_right_series, eta_series, current_frame_no, color_map_bgr=color_map_bgr, width=canvas_width, height=bottom_height)
         dashboards.append(_compose_dashboard(fd, pipe_img, diagrams_img, canvas_width, top_height, middle_height, bottom_height))
     output_fps = max(1.0, 1.0 / max(0.001, float(getattr(config, "summary_pause_s", 0.2))))
     print(f"[SUMMARY] Built {len(dashboards)} dashboard frames from {len(frames_data)} processed frames.")

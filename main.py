@@ -213,7 +213,7 @@ def build_config(args: argparse.Namespace) -> ReconstructionConfig:
         rotational_fit_min_points_per_section=args.rotational_fit_min_points_per_section,
         rotational_fit_radius_statistic=args.rotational_fit_radius_statistic,
         rotational_fit_max_surface_points=args.rotational_fit_max_surface_points,
-        front_back_eccentricity=args.front_back_eccentricity or args.preview_parameter_labels,
+        front_back_eccentricity=args.front_back_eccentricity or args.preview_parameter_labels or args.summary_visualization,
         front_back_eccentricity_csv=args.front_back_eccentricity_csv,
         front_back_edge_margin_mm=args.front_back_edge_margin_mm,
         front_back_min_tip_points=args.front_back_min_tip_points,
