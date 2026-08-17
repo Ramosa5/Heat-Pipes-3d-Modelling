@@ -448,35 +448,61 @@ def update_tracking_for_frame(file_name: str,
     return tracking_rows, label_rows_12, label_rows_34
 
 
-def process_frame(img_info: dict[str, Any],
-                  annotations: list[dict[str, Any]],
-                  bubble_cat_id: int,
-                  global_frame_no: int,
-                  local_frame_no: int,
-                  total_selected: int,
-                  config: ReconstructionConfig,
-                  tracker: BubbleTracker | None = None) -> dict[str, Any] | None:
-    """Process one image frame and return data needed for preview/export."""
-    img_id = img_info["id"]
-    img_path = os.path.join(config.dataset_dir, img_info["file_name"])
+def process_masks_frame(frame_image,
+                        masks_by_tube: dict[int, Any],
+                        tube_anns: dict[int, list[dict[str, Any]]],
+                        file_name: str,
+                        global_frame_no: int,
+                        local_frame_no: int,
+                        total_selected: int,
+                        config: ReconstructionConfig,
+                        tracker: BubbleTracker | None = None) -> dict[str, Any] | None:
+    """Process one already-loaded frame using masks supplied by any source.
 
-    gray = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
-    if gray is None:
-        print(f"[WARN] Nie mogę wczytać: {img_path} — pomijam")
+    This is the shared reconstruction core. COCO mode and VIDEO prediction mode
+    both have to produce the same four original-view masks:
+
+        mask1_orig, mask2_orig, mask3_orig, mask4_orig
+
+    After that point the pipeline is identical: rectification, reconstruction,
+    tracking, parameter calculation, preview/dashboard export.
+    """
+    import numpy as np
+
+    if frame_image is None:
+        print(f"[WARN] Empty frame for {file_name} — pomijam")
         return None
 
-    h, w = gray.shape
+    frame_arr = np.asarray(frame_image)
+    if frame_arr.ndim == 2:
+        gray = frame_arr.astype(np.uint8, copy=False)
+        frame_for_overlay = gray
+        h, w = gray.shape
+    elif frame_arr.ndim == 3:
+        frame_for_overlay = frame_arr.astype(np.uint8, copy=False)
+        gray = cv2.cvtColor(frame_for_overlay, cv2.COLOR_BGR2GRAY)
+        h, w = gray.shape
+    else:
+        print(f"[WARN] Unsupported frame shape for {file_name}: {frame_arr.shape} — pomijam")
+        return None
+
+    def clean_mask(idx: int) -> Any:
+        mask = masks_by_tube.get(idx, None)
+        if mask is None:
+            return np.zeros((h, w), dtype=np.uint8)
+        mask = np.asarray(mask)
+        if mask.shape[:2] != (h, w):
+            mask = cv2.resize(mask.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
+        return ((mask > 0).astype(np.uint8) * 255)
+
+    mask1_orig = clean_mask(0)
+    mask2_orig = clean_mask(1)
+    mask3_orig = clean_mask(2)
+    mask4_orig = clean_mask(3)
+
     x_left = 0
     x_right = w - 1
 
-    bubble_anns = [
-        ann for ann in annotations
-        if ann["image_id"] == img_id and ann["category_id"] == bubble_cat_id
-    ]
-    tube_anns = split_annotations_by_tube(bubble_anns, config.tubes, config.margin_px)
-
-    mask1_orig = build_bubble_mask_from_anns(tube_anns[0], h, w)
-    mask2_orig = build_bubble_mask_from_anns(tube_anns[1], h, w)
     rect_top_12, rect_side_12, _, _ = rectify_and_align_pair(
         mask1_orig,
         config.tubes[0],
@@ -488,8 +514,6 @@ def process_frame(img_info: dict[str, Any],
         keep_aspect=config.keep_aspect,
     )
 
-    mask3_orig = build_bubble_mask_from_anns(tube_anns[2], h, w)
-    mask4_orig = build_bubble_mask_from_anns(tube_anns[3], h, w)
     rect_top_34, rect_side_34, _, _ = rectify_and_align_pair(
         mask3_orig,
         config.tubes[2],
@@ -501,10 +525,10 @@ def process_frame(img_info: dict[str, Any],
         keep_aspect=config.keep_aspect,
     )
 
-    file_stem = safe_stem(img_info["file_name"])
+    file_stem = safe_stem(file_name)
 
     if config.save_masks:
-        # Zapis masek po każdym przetworzonym zdjęciu
+        # Zapis masek po każdym przetworzonym zdjęciu / klatce wideo
         save_mask(mask1_orig, config.masks_dir, file_stem, "tube1_orig")
         save_mask(mask2_orig, config.masks_dir, file_stem, "tube2_orig")
         save_mask(mask3_orig, config.masks_dir, file_stem, "tube3_orig")
@@ -529,7 +553,7 @@ def process_frame(img_info: dict[str, Any],
     )
 
     tracking_rows, track_labels_12, track_labels_34 = update_tracking_for_frame(
-        file_name=img_info["file_name"],
+        file_name=file_name,
         frame_no=global_frame_no,
         bubbles_12=bubbles_12,
         bubbles_34=bubbles_34,
@@ -538,7 +562,7 @@ def process_frame(img_info: dict[str, Any],
     )
 
     eccentricity_rows, mask_parameter_rows = calculate_and_save_frame_parameters(
-        file_name=img_info["file_name"],
+        file_name=file_name,
         frame_no=global_frame_no,
         rect_top_12=rect_top_12,
         rect_side_12=rect_side_12,
@@ -554,7 +578,7 @@ def process_frame(img_info: dict[str, Any],
     )
 
     rotational_fit_rows = calculate_and_save_rotational_fit_parameters(
-        file_name=img_info["file_name"],
+        file_name=file_name,
         frame_no=global_frame_no,
         bubbles_12=bubbles_12,
         bubbles_34=bubbles_34,
@@ -562,7 +586,7 @@ def process_frame(img_info: dict[str, Any],
     )
 
     front_back_eccentricity_rows = calculate_and_save_front_back_eccentricity_parameters(
-        file_name=img_info["file_name"],
+        file_name=file_name,
         frame_no=global_frame_no,
         bubbles_12=bubbles_12,
         bubbles_34=bubbles_34,
@@ -573,14 +597,14 @@ def process_frame(img_info: dict[str, Any],
     parameter_labels_34 = build_preview_parameter_labels(tracking_rows, eccentricity_rows, rotational_fit_rows, front_back_eccentricity_rows, "tube34") if config.preview_parameter_labels else []
 
     frame_image_with_ids = None
+    summary_track_colors = None
     if config.annotate_frame_parameters or config.summary_visualization:
-        masks_by_tube = {
+        masks_by_tube_for_overlay = {
             0: mask1_orig,
             1: mask2_orig,
             2: mask3_orig,
             3: mask4_orig,
         }
-        summary_track_colors = None
         if config.summary_visualization:
             try:
                 from .summary_visualization import build_summary_series_color_map
@@ -589,10 +613,10 @@ def process_frame(img_info: dict[str, Any],
                 summary_track_colors = None
 
         frame_image_with_ids = build_parameter_overlay_frame(
-            gray,
+            frame_for_overlay,
             tubes=config.tubes,
             tube_anns=tube_anns,
-            masks_by_tube=masks_by_tube,
+            masks_by_tube=masks_by_tube_for_overlay,
             rect_shapes={
                 "tube12": rect_top_12.shape,
                 "tube34": rect_top_34.shape,
@@ -601,19 +625,25 @@ def process_frame(img_info: dict[str, Any],
             eccentricity_rows=eccentricity_rows,
             diameter_mm=config.diameter_mm,
             frame_no=global_frame_no,
-            file_name=img_info["file_name"],
+            file_name=file_name,
             show_mask_overlay=False,
             track_id_color_map=summary_track_colors,
             label_mode="id_only",
         )
 
     if config.annotate_frame_parameters:
+        os.makedirs(config.annotated_frames_dir, exist_ok=True)
         out_path = os.path.join(config.annotated_frames_dir, f"{file_stem}_parameters.png")
         parameter_frame = build_parameter_overlay_frame(
-            gray,
+            frame_for_overlay,
             tubes=config.tubes,
             tube_anns=tube_anns,
-            masks_by_tube=masks_by_tube,
+            masks_by_tube={
+                0: mask1_orig,
+                1: mask2_orig,
+                2: mask3_orig,
+                3: mask4_orig,
+            },
             rect_shapes={
                 "tube12": rect_top_12.shape,
                 "tube34": rect_top_34.shape,
@@ -622,7 +652,7 @@ def process_frame(img_info: dict[str, Any],
             eccentricity_rows=eccentricity_rows,
             diameter_mm=config.diameter_mm,
             frame_no=global_frame_no,
-            file_name=img_info["file_name"],
+            file_name=file_name,
             show_mask_overlay=False,
             track_id_color_map=summary_track_colors,
             label_mode="parameters",
@@ -632,24 +662,29 @@ def process_frame(img_info: dict[str, Any],
 
     pipe_mesh_12 = None
     pipe_mesh_34 = None
-    if config.show_preview:
+    if config.show_preview or config.summary_visualization:
         # Coordinate system after conversion:
         #   X,Y = radial circular cross-section, Z = long pipe axis.
         # Origin is at the centre of the circular cylinder face at z=0.
-        pipe_mesh_12 = build_pipe_cylinder_mesh_from_rectified_shape(
-            rect_top_12.shape,
-            diameter_mm=config.diameter_mm,
-            voxel_mm=voxel_mm_12,
-            resolution=96,
-            open_ends=True,
-        )
-        pipe_mesh_34 = build_pipe_cylinder_mesh_from_rectified_shape(
-            rect_top_34.shape,
-            diameter_mm=config.diameter_mm,
-            voxel_mm=voxel_mm_34,
-            resolution=96,
-            open_ends=True,
-        )
+        try:
+            pipe_mesh_12 = build_pipe_cylinder_mesh_from_rectified_shape(
+                rect_top_12.shape,
+                diameter_mm=config.diameter_mm,
+                voxel_mm=voxel_mm_12,
+                resolution=96,
+                open_ends=True,
+            )
+            pipe_mesh_34 = build_pipe_cylinder_mesh_from_rectified_shape(
+                rect_top_34.shape,
+                diameter_mm=config.diameter_mm,
+                voxel_mm=voxel_mm_34,
+                resolution=96,
+                open_ends=True,
+            )
+        except ImportError as exc:
+            if config.show_preview:
+                raise
+            print(f"[SUMMARY] PyVista pipe mesh unavailable ({exc}); summary will use the 2D fallback projection.")
 
     if config.save_point_clouds:
         # Zapis chmur punktów po stworzeniu każdej chmury punktów
@@ -657,17 +692,20 @@ def process_frame(img_info: dict[str, Any],
         save_point_cloud_from_volume(vol_34, voxel_mm_34, config.point_clouds_dir, file_stem, "tube34")
 
     print(
-        f"[frame {global_frame_no} ({local_frame_no}/{total_selected})] {img_info['file_name']} | "
+        f"[frame {global_frame_no} ({local_frame_no}/{total_selected})] {file_name} | "
         f"pairs12={n_pairs_12} filled12={int(vol_12.sum())} | "
         f"pairs34={n_pairs_34} filled34={int(vol_34.sum())}"
     )
 
     return {
-        "title": f"Frame {global_frame_no}: {img_info['file_name']}",
+        "title": f"Frame {global_frame_no}: {file_name}",
         "frame_no": global_frame_no,
-        "file_name": img_info["file_name"],
-        "frame_image": gray.copy(),
+        "file_name": file_name,
+        "frame_image": frame_for_overlay.copy(),
         "frame_image_with_ids": frame_image_with_ids,
+        "masks_by_tube": {0: mask1_orig, 1: mask2_orig, 2: mask3_orig, 3: mask4_orig},
+        "tube_anns": tube_anns,
+        "rect_shapes": {"tube12": rect_top_12.shape, "tube34": rect_top_34.shape},
         "vol_12": vol_12,
         "vox_12": voxel_mm_12,
         "pipe_mesh_12": pipe_mesh_12,
@@ -683,6 +721,53 @@ def process_frame(img_info: dict[str, Any],
         "rotational_fit_rows": rotational_fit_rows,
         "front_back_eccentricity_rows": front_back_eccentricity_rows,
     }
+
+
+def process_frame(img_info: dict[str, Any],
+                  annotations: list[dict[str, Any]],
+                  bubble_cat_id: int,
+                  global_frame_no: int,
+                  local_frame_no: int,
+                  total_selected: int,
+                  config: ReconstructionConfig,
+                  tracker: BubbleTracker | None = None) -> dict[str, Any] | None:
+    """Process one COCO image frame and return data needed for preview/export."""
+    img_id = img_info["id"]
+    img_path = os.path.join(config.dataset_dir, img_info["file_name"])
+
+    gray = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+    if gray is None:
+        print(f"[WARN] Nie mogę wczytać: {img_path} — pomijam")
+        return None
+
+    h, w = gray.shape
+    bubble_anns = [
+        ann for ann in annotations
+        if ann["image_id"] == img_id and ann["category_id"] == bubble_cat_id
+    ]
+    tube_anns = split_annotations_by_tube(bubble_anns, config.tubes, config.margin_px)
+
+    mask1_orig = build_bubble_mask_from_anns(tube_anns[0], h, w)
+    mask2_orig = build_bubble_mask_from_anns(tube_anns[1], h, w)
+    mask3_orig = build_bubble_mask_from_anns(tube_anns[2], h, w)
+    mask4_orig = build_bubble_mask_from_anns(tube_anns[3], h, w)
+
+    return process_masks_frame(
+        frame_image=gray,
+        masks_by_tube={
+            0: mask1_orig,
+            1: mask2_orig,
+            2: mask3_orig,
+            3: mask4_orig,
+        },
+        tube_anns=tube_anns,
+        file_name=img_info["file_name"],
+        global_frame_no=global_frame_no,
+        local_frame_no=local_frame_no,
+        total_selected=total_selected,
+        config=config,
+        tracker=tracker,
+    )
 
 
 def run_pipeline(config: ReconstructionConfig) -> list[dict[str, Any]]:

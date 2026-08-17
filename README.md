@@ -287,3 +287,25 @@ Increase the value, for example `8` or `10`, when the pipes should start even sm
 ## End-of-processing summary visualization
 
 Use `python main.py --summary-visualization --no-preview` to open a single smooth summary window after processing. The window shows the original video frame on top, the reconstructed pipes in the middle, and two time-series plots at the bottom: `e(t)` from eccentricity (`e*`) and `eta(t)` from the rotational-fit index (`I_rot`) for all tracked bubbles.
+
+## Video source mode
+
+The normal COCO workflow is still available:
+
+```bash
+py main.py --source coco --dataset-dir bubble.coco/train --coco-file _annotations.coco.json --start-frame 89 --n-frames 10 --summary-visualization --no-preview
+```
+
+The new video workflow uses Mask R-CNN predictions instead of COCO annotations:
+
+```bash
+py main.py --source video --video C001H002S0001.avi --model new_best_maskrcnn_bubble.pth --start-frame 89 --n-frames 10 --summary-visualization --no-preview
+```
+
+In video mode, Mask R-CNN masks are predicted for each selected video frame, assigned to tube1/tube2/tube3/tube4 by bbox centre, and then passed into the same rectification and 3D reconstruction pipeline used by COCO mode.
+
+Optional debug video with 2D Mask R-CNN detections:
+
+```bash
+py main.py --source video --video C001H002S0001.avi --model new_best_maskrcnn_bubble.pth --start-frame 89 --n-frames 10 --summary-visualization --no-preview --save-detection-video detected_input.avi
+```

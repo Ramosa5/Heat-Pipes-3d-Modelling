@@ -542,12 +542,37 @@ def _render_diagrams(frame_nos: list[int],
 def _compose_dashboard(frame_data: dict[str, Any],
                        pipe_img: np.ndarray,
                        diagrams_img: np.ndarray,
+                       config,
+                       color_map_bgr: dict[str, tuple[int, int, int]] | None = None,
                        canvas_width: int = 1400,
                        top_height: int = 330,
                        middle_height: int = 330,
                        bottom_height: int = 330) -> np.ndarray:
     left_img = _grayscale_to_rgb(frame_data["frame_image"])
-    right_src = frame_data.get("frame_image_with_ids", None)
+
+    # Build the right top frame here, after the global legend color map is known,
+    # so ID colors match the legend and plots across the whole animation.
+    right_src = None
+    try:
+        from .frame_annotation import build_parameter_overlay_frame
+        right_src = build_parameter_overlay_frame(
+            frame_data["frame_image"],
+            tubes=config.tubes,
+            tube_anns=frame_data.get("tube_anns", {0: [], 1: [], 2: [], 3: []}),
+            masks_by_tube=frame_data.get("masks_by_tube", {}),
+            rect_shapes=frame_data.get("rect_shapes", {}),
+            tracking_rows=frame_data.get("tracking_rows", []) or [],
+            eccentricity_rows=frame_data.get("eccentricity_rows", []) or [],
+            diameter_mm=float(getattr(config, "diameter_mm", 20.0)),
+            frame_no=int(frame_data.get("frame_no", 0)),
+            file_name=str(frame_data.get("file_name", "")),
+            show_mask_overlay=False,
+            track_id_color_map=color_map_bgr,
+            label_mode="id_only",
+        )
+    except Exception:
+        right_src = frame_data.get("frame_image_with_ids", None)
+
     right_img = _grayscale_to_rgb(right_src) if right_src is not None else left_img.copy()
 
     panel_width = canvas_width // 2
@@ -667,7 +692,7 @@ def show_summary_visualization(frames_data: list[dict[str, Any]], config) -> Non
         current_frame_no = int(fd.get("frame_no", 0))
         pipe_img = _render_pipe_projection(fd, config, color_map_bgr=color_map_bgr, width=canvas_width, height=middle_height)
         diagrams_img = _render_diagrams(frame_nos, e_left_series, e_right_series, eta_series, current_frame_no, color_map_bgr=color_map_bgr, width=canvas_width, height=bottom_height)
-        dashboards.append(_compose_dashboard(fd, pipe_img, diagrams_img, canvas_width, top_height, middle_height, bottom_height))
+        dashboards.append(_compose_dashboard(fd, pipe_img, diagrams_img, config, color_map_bgr, canvas_width, top_height, middle_height, bottom_height))
     output_fps = max(1.0, 1.0 / max(0.001, float(getattr(config, "summary_pause_s", 0.2))))
     print(f"[SUMMARY] Built {len(dashboards)} dashboard frames from {len(frames_data)} processed frames.")
     _save_summary_outputs(dashboards, fps=output_fps)

@@ -6,7 +6,6 @@ import numpy as np
 from PIL import Image
 from torchvision.transforms import functional as F
 
-
 DEFAULT_MODEL_PATH = "new_best_maskrcnn_bubble.pth"
 DEFAULT_VIDEO_PATH = "C001H002S0001.avi"
 DEFAULT_SCORE_THRESHOLD = 0.3

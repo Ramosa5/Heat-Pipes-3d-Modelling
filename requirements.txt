@@ -3,3 +3,6 @@ opencv-python
 matplotlib
 pyvista
 scipy
+pillow
+torch
+torchvision
