@@ -11,10 +11,18 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Bubble 3D reconstruction runner. main.py only orchestrates the modular pipeline."
     )
+    parser.add_argument("--source", choices=["coco", "video"], default="coco", help="Input source: COCO annotations or Mask R-CNN predictions from a video.")
     parser.add_argument("--dataset-dir", default="bubble.coco/train")
     parser.add_argument("--coco-file", default="_annotations.coco.json")
     parser.add_argument("--start-frame", type=int, default=100)
     parser.add_argument("--n-frames", type=int, default=10)
+    parser.add_argument("--video", default="C001H002S0001.avi", help="Input video path used when --source video.")
+    parser.add_argument("--model", default="new_best_maskrcnn_bubble.pth", help="Mask R-CNN .pth model used when --source video.")
+    parser.add_argument("--score", type=float, default=0.3, help="Mask R-CNN detection score threshold used when --source video.")
+    parser.add_argument("--mask", type=float, default=0.3, help="Mask R-CNN mask threshold used when --source video.")
+    parser.add_argument("--video-step", type=int, default=1, help="Process every Nth video frame when --source video.")
+    parser.add_argument("--save-detection-video", default=None, help="Optional debug video showing Mask R-CNN predictions used for reconstruction.")
+    parser.add_argument("--show-detection-window", action="store_true", help="Show live 2D Mask R-CNN prediction window while processing video.")
 
     parser.add_argument("--save-masks", action="store_true", help="Save original and rectified masks.")
     parser.add_argument("--save-point-clouds", action="store_true", help="Save reconstructed point clouds as PLY.")
@@ -235,7 +243,22 @@ def main() -> None:
         return
 
     config = build_config(args)
-    run_pipeline(config)
+
+    if args.source == "video":
+        from bubble_reconstruction.video_processing import run_video_pipeline
+
+        run_video_pipeline(
+            config=config,
+            video_path=args.video,
+            model_path=args.model,
+            score_threshold=args.score,
+            mask_threshold=args.mask,
+            step=args.video_step,
+            save_detection_video=args.save_detection_video,
+            show_detection_window=args.show_detection_window,
+        )
+    else:
+        run_pipeline(config)
 
 
 if __name__ == "__main__":
